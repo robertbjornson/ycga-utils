@@ -1,9 +1,9 @@
 
-import os, hashlib, sys, datetime, pwd, grp
+import os, hashlib, sys, datetime, pwd, grp, gzip
 
 def md5sum(filename, blocksize=65536):
     hash = hashlib.md5()
-    with open(filename, "rb") as f:
+    with gzip.open(filename, "rb") if filename.endswith(".gz") else open(filename, "rb") as f:
         for block in iter(lambda: f.read(blocksize), b""):
             hash.update(block)
     return hash.hexdigest()
