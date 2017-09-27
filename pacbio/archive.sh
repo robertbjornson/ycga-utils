@@ -31,8 +31,8 @@ do
 	then
 	    if [ -f $ff ]
 	    then
-		echo "$ff $tf appears finished, skipping" | tee -a  ${logfile}
-
+		# only writing this to logfile now to reduce verbosity
+		echo "$ff $tf appears finished, skipping" >>  ${logfile}
 	    else
 		echo "ERROR, $ff $tf appears partial, FIX!" | tee -a  ${logfile}
 		exit 1

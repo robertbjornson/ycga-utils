@@ -357,7 +357,7 @@ class quipjob(threading.Thread):
         self.fn=fn
         self.tarp=tarp
         self.tn=re.sub('.gz$', '', fn)+'.qp'
-        self.est_sz=os.path.getsize(fn)*0.75 # estimated size of converted file
+        self.est_sz=os.path.getsize(fn)*0.75/(1024.0**3) # estimated size of converted file in GB
         self.true_sz=0
         self.check=[]
         self.status=None
@@ -549,7 +549,7 @@ if __name__=='__main__':
     parser.add_argument("-l", "--logfile", dest="logfile", default="archive", help="logfile prefix")
     parser.add_argument("--testlen", dest="testlen", type=int, default=10000, help="number of bytes to validate from each file")
     parser.add_argument("--maxthds", dest="maxthds", type=int, default=20, help="max threads")
-    parser.add_argument("--maxsum", dest="maxsum", type=int, default=32000000000, help="max memory to use")
+    parser.add_argument("--maxsum", dest="maxsum", type=int, default=200, help="max memory to use (GBytes)")
 
     o=parser.parse_args()
     starttime=time.time()
