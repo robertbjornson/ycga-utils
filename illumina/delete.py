@@ -1,23 +1,28 @@
-import glob, itertools, os, logging, argparse, time, shutil, subprocess, re, sys
+import glob, itertools, os, logging, argparse, time, shutil, subprocess, re, sys, io
 from multiprocessing import Pool
 
 import listTree
 
+''' This function takes a run name and uses the date component of the name to determine whether
+it is earlier than the cutoff date
+''' 
 def fltr(r):
     rn=os.path.basename(r)
     try:
-        dt=int(rn[:6])
-        return dt < o.cutoff
+        return int(rn[:6]) < o.cutoff
     except:
-        print ("weirdly named run: %s" % r)
+        logger.error("weirdly named run: %s" % r)
         return False
 
+'''
+# all the places where runs are found
 runlocs=['/ycga-ba/ba_sequencers?/sequencer?/runs/*',
 '/ycga-gpfs/sequencers/panfs/sequencers*/sequencer?/runs/*',
 '/ycga-gpfs/sequencers/illumina/sequencer?/runs/*']
 
 #runlocs=['/ycga-gpfs/sequencers/illumina/sequencerX/runs/*',]
 
+# corresonding archive locations
 equiv=(
     ("/ycga-gpfs/sequencers/panfs/", "/SAY/archive/YCGA-729009-YCGA/archive/panfs/"),
     ("/ycga-gpfs/sequencers/panfs/sequencers1/", "/SAY/archive/YCGA-729009-YCGA/archive/panfs/sequencers/"),
@@ -27,13 +32,14 @@ equiv=(
 
 '''
 
-runlocs=["/home/rob/project/tools/ycga-utils/illumina/FAKERUNS/sequencers/sequencer?/*",]
+runlocs=["/home/rob/project/tools/ycga-utils/illumina/FAKERUNS/sequencers/sequencer?/runs/*",]
 
 equiv=(
     ("/home/rob/project/tools/ycga-utils/illumina/FAKERUNS", "/home/rob/project/tools/ycga-utils/illumina/FAKEARCHIVE"),
 )
-'''
 
+
+''' Check if completed archive exists for some run '''
 def chkArchive(r):
     for o, a in equiv:
         if r.startswith(o):
@@ -45,13 +51,14 @@ def chkArchive(r):
                 return chkfile
     return None
 
-
-
+''' Determine corresponding TRASH dir location for a run, and confirm existence'''
 def getTrashDir(r):
-    mo=re.match('(/ycga-gpfs/sequencers/illumina/|/ycga-ba/ba_sequencers\d/+|/ycga-gpfs/sequencers/panfs/)', r)
-    td=mo.group(1)+"TRASH"
+    mo=re.match('(/home/rob/project/tools/ycga-utils/illumina/|/ycga-gpfs/sequencers/illumina/|/ycga-ba/ba_sequencers\d/|/ycga-gpfs/sequencers/panfs/)(.*)', r)
+    pref=mo.group(1)
+    rest=mo.group(2)
+    td=os.path.join(pref,"TRASH")
     if os.path.isdir(td):
-        return td
+        return os.path.join(td, rest)
     else:
         logger.error("Trash dir %s doesn't exist" % td)
         raise Exception("No trash dir")
@@ -61,7 +68,7 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
 
     parser.add_argument("-c", "--cutoff", dest="cutoff", type=int, required=True, help="cutoff date YYMMDD")
-    parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=True, help="don't actually delete")
+    parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=False, help="don't actually delete")
     parser.add_argument("-l", "--logfile", dest="logfile", default="delete", help="logfile prefix")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help="be verbose")
     parser.add_argument("-i", "--interactive", dest="interactive", action="store_true", default=False, help="ask before each deletion")
@@ -70,7 +77,6 @@ if __name__=='__main__':
     parser.add_argument("-P", "--procs", dest="procs", type=int, default=1, help="number of procs to use for checksumming")
 
     o=parser.parse_args()
-    starttime=time.time()
 
     # set up logger
     logger = logging.getLogger('delete')
@@ -81,41 +87,50 @@ if __name__=='__main__':
     hc.setFormatter(formatter)
     if not o.verbose:
         hc.setLevel(logging.INFO)
-    
     logger.addHandler(hc)
 
     hf = logging.FileHandler("%s_%s.log" % (o.logfile, time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())))
     hf.setFormatter(formatter)
-    if not o.verbose:
-        hf.setLevel(logging.DEBUG)
-
+    hf.setLevel(logging.DEBUG)
     logger.addHandler(hf)
 
-    logger.info("here")
+    logger.info("Deletion Started")
 
+    # all runs
     runs=itertools.chain.from_iterable([glob.glob(loc) for loc in runlocs])
 
+    # runs passing date cutoff
     delruns=[r for r in runs if fltr(r)]
 
+    # runs matching pattern
     pat=re.compile(o.pattern)
     delruns=[r for r in delruns if pat.search(r)]
     
     deletedcnt=0
     deletecnt=0
     missingcnt=0
+    nodeletecnt=0
     tot_files_rm=0
     tot_bytes_rm=0
 
     pool=Pool(o.procs)
 
     for r in delruns:
+        outbuf=io.StringIO()
+        logger.info("Checking %s" % r)
         if r.endswith(".DELETED"):
             logger.info("Previously deleted %s" % (r,))
             deletedcnt+=1
             # already deleted
             continue
-        a=chkArchive(r);
-        if not a:
+        # any NODELETE.* file in run dir prevents deletion
+        ndels=glob.glob(os.path.join(r, "NODELETE*"))
+        if ndels:
+            logger.info("NODELETE(s) %s found in %s, skipping" % (" ".join(ndels), r))
+            nodeletecnt+=1
+            continue
+        a=chkArchive(r)
+        if not a: 
             logger.info("No archive for %s" % r)
             missingcnt+=1
             continue
@@ -124,46 +139,48 @@ if __name__=='__main__':
             if o.interactive:
                 print ("Go ahead [Yn]?")
                 resp=input()
-                if resp.lower()=='n': continue
+                if resp.lower()!='y': continue
+
+            ''' trashdir is the location of the FC dir in trash.  It should not already exist'''
+            trashdir=getTrashDir(r)
+            logger.debug("Trashdir is %s" % trashdir)
+
+            if os.path.exists(trashdir):
+                logger.error("%s exists already, cancelling move" % trashdir)
+                continue
 
             deletecnt+=1
+
+            '''Here's where we finally do something!  For now, move the tree to corresponding TRASH dir, rather than delete'''
+
+            outbuf.write("Run deleted %s\n" % time.asctime())
+            outbuf.write("Archive is here: %s\n" % os.path.dirname(a))
+            outbuf.write("Files deleted:\n")
+            outbuf.flush()
+            bytes_rm=0
+            files_rm=0
+            sums=listTree.listTree(r, o.dosum)
+            for s in sums:
+                outbuf.write("\t".join(s)+'\n')
+                bytes_rm+=int(s[3])
+                files_rm+=1
+
+            tot_files_rm+=files_rm
+            tot_bytes_rm+=bytes_rm
+                
+            logger.debug("Moving %s to %s" % (r, trashdir))
+            if not o.dryrun: 
+                os.renames(r, trashdir)
+
+            outbuf.write("Done with %s: %d files, %d bytes\n" % (r, files_rm, bytes_rm))
+
             if not o.dryrun:
                 delfp=open(r+'.DELETED', 'w')
             else:
-                delfp=open(os.path.basename(r)+".DELETED", 'w')
+                delfp=open(os.path.basename(r)+".DELETED", 'w') # write dryrun logs here 
 
-            delfp.write("Run deleted %s\n" % time.asctime())
-            delfp.write("Archive is here: %s\n" % os.path.dirname(a))
-            delfp.write("Files deleted:\n")
-            delfp.flush()
-            bytes_rm=0
-            files_rm=0
-            if o.dosum:
-                sums=listTree.parListTree(pool, r)
-                for s in sums:
-                    delfp.write("\t".join(s)+'\n')
-                    bytes_rm+=int(s[3])
-                    files_rm+=1
-
-                tot_files_rm+=files_rm
-                tot_bytes_rm+=bytes_rm
-                
-            trashdir=getTrashDir(r)
-            logger.info("Trashdir is %s" % trashdir)
-
-            #if not o.dryrun: shutil.rmtree(r)
-            delfp.write("Done with %s: %d files, %d bytes\n" % (r, files_rm, bytes_rm))
+            delfp.write(outbuf.getvalue())
             delfp.close()
+            outbuf.close()
 
-
-    logger.info("All done.  Previous deleted %d, Archive missing %d, Deleted now %d runs %d files %d bytes." % (deletedcnt, missingcnt, deletecnt, tot_files_rm, tot_bytes_rm))
-
-''' Todo
-x count and report size of deletions
-change rmtree to mv to Trash in same FS:
-  -> /ycga-gpfs/sequencers/illumina/TRASH
-     /ycga-ba/ba_sequencers#/TRASH
-     /ycga-gpfs/sequencers/panfs/
- 
-think about what to leave behind
-'''
+    logger.info("All done.  Previously deleted %d, Archive missing %d, Deleted now %d runs %d files %d bytes." % (deletedcnt, missingcnt, deletecnt, tot_files_rm, tot_bytes_rm))
