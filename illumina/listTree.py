@@ -30,7 +30,7 @@ def doFile(fn, dosum):
 
     dt=datetime.datetime.fromtimestamp(stat.st_mtime)
     sz=stat.st_size
-    return (fn, user, group, str(sz), str(dt), sm)
+    return (fn, user, group, str(sz), str(dt), str(sm))
 
 def genFiles(top):
     for d, dirs, files in os.walk(top):

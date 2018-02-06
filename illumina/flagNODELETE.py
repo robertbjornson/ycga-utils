@@ -10,19 +10,20 @@ By convention, if we want to prevent any run containing samples submitted by Sb3
 look for Project_Sb32, and create NODELETE.Project_Sb32
 
 '''
-'''
+
 runlocs=['/ycga-ba/ba_sequencers?/sequencer?/runs/*',
 '/ycga-gpfs/sequencers/panfs/sequencers*/sequencer?/runs/*',
 '/ycga-gpfs/sequencers/illumina/sequencer?/runs/*']
+
 '''
-
 runlocs=["/home/rob/project/tools/ycga-utils/illumina/FAKERUNS/sequencers/sequencer?/runs/*",]
-
+'''
 if __name__=='__main__':
 
     parser=argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
 
-    parser.add_argument("-p", "--project", dest="project", help="flag runs containing this netid as project")
+    parser.add_argument("-t", "--tag", dest="tag", required=True, help="use this as tag")
+    parser.add_argument("-f", "--file", dest="file", required=True, help="file containing run locations")
     parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=False, help="don't actually delete")
     parser.add_argument("-l", "--logfile", dest="logfile", default="flag", help="logfile prefix")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help="be verbose")
@@ -47,15 +48,13 @@ if __name__=='__main__':
 
     logger.info("Flagging Started")
 
-    runs=itertools.chain.from_iterable([glob.glob(loc) for loc in runlocs])
-    for r in runs:
-        logger.info("Checking %s" % r)
-        if o.project:
-            found=glob.glob(r+'/Data/Intensities/BaseCalls/Unaligned*/Project_%s'% o.project)
-            if found:
-                logger.info("Found %s in %s, flagging" % (found, r))
-                if not o.dryrun:
-                    with open(os.path.join(r, "NODELETE.Project_%s" % o.project), "w") as tfp:
-                        tfp.write("")
-        
+    for r in open(o.file):
+        r=r.strip()
+        print("run "+r)
+        assert(os.path.isdir(r))
+        logger.info("Found %s, flagging" % (r))
+        if not o.dryrun:
+            with open(os.path.join(r, "NODELETE.%s" % o.tag), "w") as tfp:
+                tfp.write("")
+
     logger.info("Flagging Done")

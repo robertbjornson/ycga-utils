@@ -14,7 +14,7 @@ def fltr(r):
         logger.error("weirdly named run: %s" % r)
         return False
 
-'''
+
 # all the places where runs are found
 runlocs=['/ycga-ba/ba_sequencers?/sequencer?/runs/*',
 '/ycga-gpfs/sequencers/panfs/sequencers*/sequencer?/runs/*',
@@ -30,14 +30,14 @@ equiv=(
     ("/ycga-gpfs/sequencers/illumina/", "/SAY/archive/YCGA-729009-YCGA/archive/ycga-gpfs/sequencers/illumina/")
 )
 
-'''
 
+'''
 runlocs=["/home/rob/project/tools/ycga-utils/illumina/FAKERUNS/sequencers/sequencer?/runs/*",]
 
 equiv=(
     ("/home/rob/project/tools/ycga-utils/illumina/FAKERUNS", "/home/rob/project/tools/ycga-utils/illumina/FAKEARCHIVE"),
 )
-
+'''
 
 ''' Check if completed archive exists for some run '''
 def chkArchive(r):
@@ -73,7 +73,7 @@ if __name__=='__main__':
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help="be verbose")
     parser.add_argument("-i", "--interactive", dest="interactive", action="store_true", default=False, help="ask before each deletion")
     parser.add_argument("-p", "--pattern", dest="pattern", default=".*", help="delete runs matching pattern")
-    parser.add_argument("--nosum", dest="dosum", default=True, action="store_false", help="don't do checksum")
+    parser.add_argument("--dosum", dest="dosum", default=False, action="store_true", help="do checksum")
     parser.add_argument("-P", "--procs", dest="procs", type=int, default=1, help="number of procs to use for checksumming")
 
     o=parser.parse_args()
@@ -123,7 +123,7 @@ if __name__=='__main__':
             deletedcnt+=1
             # already deleted
             continue
-        # any NODELETE.* file in run dir prevents deletion
+        # any NODELETE* file in run dir prevents deletion
         ndels=glob.glob(os.path.join(r, "NODELETE*"))
         if ndels:
             logger.info("NODELETE(s) %s found in %s, skipping" % (" ".join(ndels), r))
