@@ -16,21 +16,27 @@ def md5sum(filename, blocksize=65536):
 
 ''' Return 6 fields of info about file'''
 def doFile(fn, dosum):
-    sm=md5sum(fn) if dosum else 0
-    stat=os.stat(fn)
     try:
-        user=pwd.getpwuid(stat.st_uid)[0]
-    except KeyError:
-        user=str(stat.st_uid)
+        stat=os.stat(fn)
+        sm=md5sum(fn) if dosum else 0
+        try:
+            user=pwd.getpwuid(stat.st_uid)[0]
+        except KeyError:
+            user=str(stat.st_uid)
                 
-    try:
-        group=grp.getgrgid(stat.st_gid)[0]
-    except KeyError:
-        group=str(stat.st_gid)
+        try:
+            group=grp.getgrgid(stat.st_gid)[0]
+        except KeyError:
+            group=str(stat.st_gid)
 
-    dt=datetime.datetime.fromtimestamp(stat.st_mtime)
-    sz=stat.st_size
-    return (fn, user, group, str(sz), str(dt), str(sm))
+        dt=datetime.datetime.fromtimestamp(stat.st_mtime)
+        sz=stat.st_size
+        return (fn, user, group, str(sz), str(dt), str(sm))
+    except FileNotFoundError:
+        return (fn, "NOTFOUND", "", "0", "", "")
+    except PermissionError:
+        return (fn, "PERMISSION", "", "0", "", "")
+
 
 def genFiles(top):
     for d, dirs, files in os.walk(top):
@@ -56,5 +62,5 @@ def listTree(top, dosum):
     return recs
 
 if __name__=='__main__':
-    for l in listTree(sys.argv[1]):
+    for l in listTree(sys.argv[1], False):
         print ("\t".join(l))
