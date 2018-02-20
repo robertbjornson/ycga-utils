@@ -1,3 +1,5 @@
+#!/home/rob/Installed/anaconda3/bin/python
+
 import glob, itertools, os, logging, argparse, time, shutil, subprocess, re, sys, io
 from multiprocessing import Pool
 
@@ -75,6 +77,7 @@ if __name__=='__main__':
     parser.add_argument("-p", "--pattern", dest="pattern", default=".*", help="delete runs matching pattern")
     parser.add_argument("--dosum", dest="dosum", default=False, action="store_true", help="do checksum")
     parser.add_argument("-P", "--procs", dest="procs", type=int, default=1, help="number of procs to use for checksumming")
+    parser.add_argument("-r", "--runs", dest="runs", help="file containing runs to delete")
 
     o=parser.parse_args()
 
@@ -91,13 +94,19 @@ if __name__=='__main__':
 
     hf = logging.FileHandler("%s_%s.log" % (o.logfile, time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())))
     hf.setFormatter(formatter)
-    hf.setLevel(logging.DEBUG)
+    if not o.verbose:
+        hc.setLevel(logging.INFO)
+    hf.setLevel(logging.INFO)
     logger.addHandler(hf)
 
     logger.info("Deletion Started")
 
     # all runs
-    runs=itertools.chain.from_iterable([glob.glob(loc) for loc in runlocs])
+    if o.runs:
+        with open(o.runs) as fp:
+            runs=[l.rstrip() for l in fp]
+    else:
+        runs=itertools.chain.from_iterable([glob.glob(loc) for loc in runlocs])
 
     # runs passing date cutoff
     delruns=[r for r in runs if fltr(r)]
@@ -118,7 +127,8 @@ if __name__=='__main__':
     for r in delruns:
         outbuf=io.StringIO()
         logger.info("Checking %s" % r)
-        if r.endswith(".DELETED"):
+        if r.endswith(".DELETED") or (o.dryrun and os.path.exists(os.path.basename(r)+".DELETED")):
+            # when dryrunning, .DELETED would be in current dir
             logger.info("Previously deleted %s" % (r,))
             deletedcnt+=1
             # already deleted
