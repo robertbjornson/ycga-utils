@@ -612,6 +612,9 @@ if __name__=='__main__':
 
     passedruns=[]
     for run in runs:
+	if run.endswith(".DELETED"):
+            logger.debug("Skipping %s: deleted", run) 
+            continue
         rundate=os.path.basename(run)[0:6]
         if o.cuton and rundate < o.cuton:
             logger.debug("Skipping %s: earlier than cuton" % run)
