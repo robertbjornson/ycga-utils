@@ -1,6 +1,6 @@
 #!/home/rob/Installed/anaconda3/bin/python
 
-import glob, itertools, os, logging, argparse, time, shutil, subprocess, re, sys, io
+import glob, itertools, os, logging, argparse, time, shutil, subprocess, re, sys, io, datetime
 from multiprocessing import Pool
 
 import listTree
@@ -64,12 +64,28 @@ def getTrashDir(r):
     else:
         logger.error("Trash dir %s doesn't exist" % td)
         raise Exception("No trash dir")
+
+# can't use os.renames because renames prunes the source dirs if empty (ugh)
+def myrename(f,t):
+    os.makedirs(t)
+    os.rename(f,t)
+
+''' This function turns a negative date delta into a 6 digit date that many days in the past.  Anything else is returned unchanged '''
+def fixCut(cut):
+    try:
+        if int(cut) < 0:
+            d=datetime.datetime.now() + datetime.timedelta(days=int(cut))
+            return int(d.strftime("%y%m%d"))
+    except:
+        pass
+    return cut
     
 if __name__=='__main__':
 
     parser=argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
 
-    parser.add_argument("-c", "--cutoff", dest="cutoff", type=int, required=True, help="cutoff date YYMMDD")
+    parser.add_argument("--automatic", dest="automatic", action="store_true", default=False, help="automatic settings")
+    parser.add_argument("-c", "--cutoff", dest="cutoff", type=int, default=365*2, help="cutoff date (YYMMDD) or -days")
     parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=False, help="don't actually delete")
     parser.add_argument("-l", "--logfile", dest="logfile", default="delete", help="logfile prefix")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help="be verbose")
@@ -99,14 +115,19 @@ if __name__=='__main__':
     hf.setLevel(logging.INFO)
     logger.addHandler(hf)
 
+    if o.automatic:
+        o.cutoff=-365*2
+    o.cutoff=fixCut(o.cutoff)
+
     logger.info("Deletion Started")
+    logger.info("Cmd: "+" ".join(sys.argv))
 
     # all runs
     if o.runs:
         with open(o.runs) as fp:
             runs=[l.rstrip() for l in fp]
     else:
-        runs=itertools.chain.from_iterable([glob.glob(loc) for loc in runlocs])
+        runs=sorted(itertools.chain.from_iterable([glob.glob(loc) for loc in runlocs]))
 
     # runs passing date cutoff
     delruns=[r for r in runs if fltr(r)]
@@ -127,6 +148,9 @@ if __name__=='__main__':
     for r in delruns:
         outbuf=io.StringIO()
         logger.info("Checking %s" % r)
+        if os.path.islink(r):
+            logger.info("Skipping softlink %s" % (r,))
+            continue
         if r.endswith(".DELETED") or (o.dryrun and os.path.exists(os.path.basename(r)+".DELETED")):
             # when dryrunning, .DELETED would be in current dir
             logger.info("Previously deleted %s" % (r,))
@@ -180,7 +204,7 @@ if __name__=='__main__':
                 
             logger.debug("Moving %s to %s" % (r, trashdir))
             if not o.dryrun: 
-                os.renames(r, trashdir)
+                myrename(r, trashdir)
 
             outbuf.write("Done with %s: %d files, %d bytes\n" % (r, files_rm, bytes_rm))
 
