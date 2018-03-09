@@ -96,7 +96,7 @@ quipfiles='''.qp$'''
 quipFilesPat=re.compile('|'.join(quipfiles.split()))
 
 # Directories matching this pattern are 1.8 Unaligned Project directories.  We want to archive their contents to a project-specific tar file.
-projectPat=re.compile('Unaligned\S*/Project_[\w\-_]+$')
+projectPat=re.compile('(Unaligned[^/]*)/Project_[\w\-_]+$')
 
 epilog="epilog"
 
@@ -197,11 +197,12 @@ def prunedirs(dirname, dirs):
             logger.debug("pruning %s" % dn)
             dirs.remove(d)
             continue
-        if o.projecttars and projectPat.search(dn):
-            logger.debug("found project %s" % dn)
-            projects.append(d)
-            dirs.remove(d)
-            continue
+        if o.projecttars:
+            mo=projectPat.search(dn)
+            if mo:
+                logger.debug("found project %s" % dn)
+                projects.append((d, mo.group(1))) # capture the Unaligned* dir name
+                dirs.remove(d)
     return projects
 
 '''
@@ -453,8 +454,8 @@ def makeTarball(top, arcdir, name, runstats):
     for dirname, dirs, files in os.walk(top):
         files.sort()
         projects=prunedirs(dirname, dirs)
-        for proj in projects:
-            makeTarball(dirname+'/'+proj, arcdir, "%s_%%s_%s" % (o.runname, proj), runstats)
+        for proj, unalignedDir in projects:
+            makeTarball(dirname+'/'+proj, arcdir, "%s_%%s_%s_%s" % (o.runname, unalignedDir, proj), runstats)
             
         fastqs+=handlefiles(dirname, files, tfp)
 
@@ -612,7 +613,7 @@ if __name__=='__main__':
 
     passedruns=[]
     for run in runs:
-	if run.endswith(".DELETED"):
+        if run.endswith(".DELETED"):
             logger.debug("Skipping %s: deleted", run) 
             continue
         rundate=os.path.basename(run)[0:6]
