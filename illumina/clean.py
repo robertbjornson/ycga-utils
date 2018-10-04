@@ -40,7 +40,7 @@ def getDirSize(d):
 def cleanRun(rundir):
     s=stats(os.path.basename(rundir))
 
-    if not os.path.exists("%s/Data/Intensities/BaseCalls/Unaligned" % rundir):
+    if not glob.glob("%s/Data/Intensities/BaseCalls/Unaligned*" % rundir):
         # check for an "Unaligned" dir as a sanity check.  Don't do anything if it doesn't exist
         logger.warning("Not cleaning %s, no Unaligned found" % rundir)
         return s
