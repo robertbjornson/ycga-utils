@@ -33,9 +33,20 @@ def getDirSize(d):
     for root, dirs, files in os.walk(d):
         total_files+=len(files)
         total_size+=sum(os.path.getsize(os.path.join(root, f)) for f in files)
-        if total_files > 200: break
+        #if total_files > 200: break
 
     return total_files, total_size
+
+def findFiles(top, pat):
+  for d, dirs, files in os.walk(top):
+    for f in files:
+      if pat.match(f):
+        yield os.path.join(d, f)
+
+''' Example 
+Undetermined_S0_L003_R2_001.fastq.gz
+'''
+undet_pat=re.compile('.*Undetermined_.*\d\d\d.fastq.gz$')
 
 def cleanRun(rundir):
     s=stats(os.path.basename(rundir))
@@ -45,9 +56,8 @@ def cleanRun(rundir):
         logger.warning("Not cleaning %s, no Unaligned found" % rundir)
         return s
 
-    logger.debug("Sizing %s" % rundir)
-    s.add(*getDirSize(rundir))
     logger.debug("Cleaning %s" % rundir)
+    s.add(*getDirSize("%s/Thumbnail_Images" % (rundir,)))
     if not o.dryrun:
         try:
             shutil.rmtree("%s/Thumbnail_Images" % (rundir,))
@@ -61,6 +71,16 @@ def cleanRun(rundir):
                 shutil.rmtree(d)
             except OSError:
                 logger.debug("Couldn't delete %s" % d)
+    
+    # remove all undetermined_ files
+    fs=0; bs=0 
+    logger.info("removing undetermined files")
+    for f in findFiles("%s/Data/Intensities/BaseCalls" % (rundir,), undet_pat):
+	logger.debug("Delete %s" % f)
+        fs+=1; bs+=os.path.getsize(f)
+	if not o.dryrun: 
+	    os.remove(f)
+    s.add(fs, bs)
 
     logger.info(s)
     cleaned='%s/cleaned.txt' % (rundir,)
@@ -79,7 +99,7 @@ class stats(object):
     def add(self, files, bytes):
         self.files+=files
         self.bytes+=bytes
-    
+
     def comb(self, other):
         self.files+=other.files
         self.bytes+=other.bytes
@@ -229,6 +249,7 @@ if __name__=='__main__':
     parser.add_argument("--nocount", dest="count", action="store_false", default=True, help="count files before deleting")
     parser.add_argument("--maxthds", dest="maxthds", type=int, default=20, help="max threads")
     parser.add_argument("--maxsum", dest="maxsum", type=int, default=32000000000, help="max memory to use")
+    parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force clean")
 
     o=parser.parse_args()
 
@@ -300,7 +321,7 @@ if __name__=='__main__':
             continue
 
         cleaned='%s/cleaned.txt' % (run,)
-        if os.path.exists(cleaned):
+        if os.path.exists(cleaned) and not o.force:
             logger.debug("Already cleaned %s" % run)
             continue
 
