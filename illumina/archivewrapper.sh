@@ -5,5 +5,5 @@
 #SBATCH -J Archive
 
 cd /ycga-gpfs/project/fas/lsprog/tools/ycga-utils/illumina/RUNS/CRONJOBS
-sudo python /ycga-gpfs/project/fas/lsprog/tools/ycga-utils/illumina/archive.py --automatic -l PROD
+sudo python /ycga-gpfs/project/fas/lsprog/tools/ycga-utils/illumina/archive.py --automatic 
 
