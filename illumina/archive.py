@@ -613,7 +613,12 @@ if __name__=='__main__':
 
     passedruns=[]
     for run in runs:
+        # original deleted run (just a file)
         if run.endswith(".DELETED"):
+            logger.debug("Skipping %s: deleted", run) 
+            continue
+        # new style deleted run (reduced tree)
+        if run.endswith(".deleted"):
             logger.debug("Skipping %s: deleted", run) 
             continue
         rundate=os.path.basename(run)[0:6]

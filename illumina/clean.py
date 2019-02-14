@@ -64,6 +64,14 @@ def cleanRun(rundir):
         except OSError:
             logger.debug("Couldn't delete Thumbnail_Images")
 
+    # Images is only found in myseq runs
+    s.add(*getDirSize("%s/Images" % (rundir,)))
+    if not o.dryrun:
+        try:
+            shutil.rmtree("%s/Images" % (rundir,))
+        except OSError:
+            logger.debug("Couldn't delete Images")
+
     for d in glob.glob("%s/Data/Intensities/L00?" % (rundir,)) + glob.glob("%s/Data/Intensities/BaseCalls/L00?" % (rundir,)):
         s.add(*getDirSize(d))
         if not o.dryrun:

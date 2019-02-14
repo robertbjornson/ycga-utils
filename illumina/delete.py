@@ -151,7 +151,7 @@ if __name__=='__main__':
         if os.path.islink(r):
             logger.info("Skipping softlink %s" % (r,))
             continue
-        if r.endswith(".DELETED") or (o.dryrun and os.path.exists(os.path.basename(r)+".DELETED")):
+        if r.endswith(".DELETED") or r.endswith(".deleted") or (o.dryrun and os.path.exists(os.path.basename(r)+".DELETED")):
             # when dryrunning, .DELETED would be in current dir
             logger.info("Previously deleted %s" % (r,))
             deletedcnt+=1
@@ -201,7 +201,15 @@ if __name__=='__main__':
 
             tot_files_rm+=files_rm
             tot_bytes_rm+=bytes_rm
-                
+
+            # copy file tree to .deleted, without fastq.gzs or Logs
+            cmd="rsync -a --exclude '*.fastq.gz' --exclude Logs --exclude RTALogs {}/ {}".format(r, r+".deleted")
+            logger.debug("Rsync: {}".format(cmd))
+            if not o.dryrun:
+                ret=subprocess.call(cmd, shell=True)
+                if ret != 0:
+                    logger.error("Rsync failed with {}".format(ret))
+
             logger.debug("Moving %s to %s" % (r, trashdir))
             if not o.dryrun: 
                 myrename(r, trashdir)
@@ -209,7 +217,8 @@ if __name__=='__main__':
             outbuf.write("Done with %s: %d files, %d bytes\n" % (r, files_rm, bytes_rm))
 
             if not o.dryrun:
-                delfp=open(r+'.DELETED', 'w')
+                # write deleted log into new reduced file tree
+                delfp=open(r+".deleted/DELETED", 'w')
             else:
                 delfp=open(os.path.basename(r)+".DELETED", 'w') # write dryrun logs here 
 
