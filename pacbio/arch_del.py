@@ -1,4 +1,4 @@
-import argparse, os, datetime, time, logging, subprocess
+import argparse, os, datetime, time, logging, subprocess, sys
 
 
 secPerDay=3600*24
@@ -33,18 +33,20 @@ if __name__=='__main__':
     parser.add_argument("archDir")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help="be verbose")
     parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=False, help="don't actually do anything")
+    parser.add_argument("--fastqs", dest="fastqs", action="store_true", default=False, help="only tar *.fastq.gz files")
     parser.add_argument("--archPeriod", dest="archPeriod", type=int, default=30, help="waiting period for archiving")
     parser.add_argument("--delPeriod", dest="delPeriod", type=int, default=365*2, help="waiting period for deletion")
     parser.add_argument("--nodel", dest="nodel", action="store_true", default=False, help="skip actual deletion, but do everything else")
+    parser.add_argument("-l", "--logfile", dest="logfile", default="arch_del", help="logfile prefix")
 
     o=parser.parse_args()
 
     # set up logging
     logger=logging.getLogger('archive')
     formatter=logging.Formatter("%(asctime)s %(threadName)s %(levelname)s %(message)s")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
-    h=logging.FileHandler('%s_arch_del.log' % (time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())))
+    h=logging.FileHandler('%s_%s.log' % (time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime()), o.logfile))
     h.setLevel(logging.DEBUG)
     h.setFormatter(formatter)
     logger.addHandler(h)
@@ -84,7 +86,10 @@ if __name__=='__main__':
                 else:
                     logger.debug ("archiving %s" % src)
                     counter["archived"]+=1
-                    cmd="(tar -cf \"%s\" \"%s\" && touch \"%s\")" % (tarFName, src, finishFName)
+                    if o.fastqs:
+                        cmd="(find %(src)s -name \"*.fastq.gz\" | tar cf %(tarFName)s --files-from=- && touch \"%(finishFName)s\")" % locals()
+                    else:
+                        cmd="(tar -cf \"%(tarFName)s\" \"%(src)s\" && touch \"%(finishFName)s\")" % locals()
                     if o.dryrun:
                         logger.debug(cmd)
                     else:
