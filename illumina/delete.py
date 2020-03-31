@@ -85,7 +85,7 @@ if __name__=='__main__':
     parser=argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter)
 
     parser.add_argument("--automatic", dest="automatic", action="store_true", default=False, help="automatic settings")
-    parser.add_argument("-c", "--cutoff", dest="cutoff", type=int, default=365*2, help="cutoff date (YYMMDD) or -days")
+    parser.add_argument("-c", "--cutoff", dest="cutoff", type=int, default=365, help="cutoff date (YYMMDD) or -days")
     parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=False, help="don't actually delete")
     parser.add_argument("-l", "--logfile", dest="logfile", default="delete", help="logfile prefix")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help="be verbose")
