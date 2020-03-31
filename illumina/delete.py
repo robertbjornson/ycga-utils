@@ -116,7 +116,7 @@ if __name__=='__main__':
     logger.addHandler(hf)
 
     if o.automatic:
-        o.cutoff=-365*2
+        o.cutoff=-365
     o.cutoff=fixCut(o.cutoff)
 
     logger.info("Deletion Started")
