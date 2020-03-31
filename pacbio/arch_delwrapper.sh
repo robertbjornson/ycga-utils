@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --mail-type all --mail-user robert.bjornson@yale.edu
+#SBATCH --mail-type end --mail-user robert.bjornson@yale.edu
 
 cd /ycga-gpfs/project/fas/lsprog/tools/ycga-utils/pacbio/RUNS
 
