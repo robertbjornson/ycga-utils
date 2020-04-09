@@ -6,4 +6,5 @@
 
 cd /ycga-gpfs/project/fas/lsprog/tools/ycga-utils/illumina/RUNS/CRONJOBS
 sudo python /ycga-gpfs/project/fas/lsprog/tools/ycga-utils/illumina/clean.py --automatic 
+sudo python /ycga-gpfs/project/fas/lsprog/tools/ycga-utils/illumina/clean.py  --cutoff=-300 --nocheckUnaligned --automatic -l DELETE_NOCHECK
 

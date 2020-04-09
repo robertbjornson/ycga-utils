@@ -51,7 +51,7 @@ undet_pat=re.compile('.*Undetermined_.*\d\d\d.fastq.gz$')
 def cleanRun(rundir):
     s=stats(os.path.basename(rundir))
 
-    if not glob.glob("%s/Data/Intensities/BaseCalls/Unaligned*" % rundir):
+    if o.checkUnaligned and not glob.glob("%s/Data/Intensities/BaseCalls/Unaligned*" % rundir):
         # check for an "Unaligned" dir as a sanity check.  Don't do anything if it doesn't exist
         logger.warning("Not cleaning %s, no Unaligned found" % rundir)
         return s
@@ -255,6 +255,7 @@ if __name__=='__main__':
     parser.add_argument("--cutoff", dest="cutoff", default="-45", help="date cutoff; a run later than this 6 digit date will not be cleaned.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
     parser.add_argument("-l", "--logfile", dest="logfile", default="clean", help="logfile prefix")
     parser.add_argument("--nocount", dest="count", action="store_false", default=True, help="count files before deleting")
+    parser.add_argument("--nocheckUnaligned", dest="checkUnaligned", action="store_false", default=True, help="don't check for Unaligned")
     parser.add_argument("--maxthds", dest="maxthds", type=int, default=20, help="max threads")
     parser.add_argument("--maxsum", dest="maxsum", type=int, default=32000000000, help="max memory to use")
     parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force clean")
