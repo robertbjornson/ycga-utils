@@ -34,7 +34,7 @@ python archive.py [-n] -v -r /ycga-gpfs/sequencers/illumina/sequencerY/runs/1610
 
 '''
 
-import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime
+import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil
 
 QUIP='/ycga-gpfs/apps/hpc/Tools/quip/1.1.8/bin/quip'
 
@@ -128,7 +128,9 @@ It keeps a list of validation tasks to be done at the end
 class tarwrapper(object):
     def __init__(self, fn):
         self.fn=fn # name of tar file
-        self.tfp=tarfile.open(fn, 'w')
+        self.tmpfn=o.staging+'/'+os.path.basename(fn)
+        self.tfp=tarfile.open(self.tmpfn, 'w')
+        #self.tfp=tarfile.open(fn, 'w')
         self.added=set() #files already added to archive
         self.check=[] # validation task to run at the end
 
@@ -144,9 +146,16 @@ class tarwrapper(object):
             arcname=name
         if arcname in self.added:
             error("Attempting to overwrite %s in %s" % (arcname, self.fn))
+        logger.debug("Adding %s" % name)
         self.tfp.add(name, arcname)
         self.added.add(arcname)
         self.check.append(validatejob(origname, arcname, o.testlen))
+
+    def finalize(self):
+        self.tfp.close()
+        logger.debug("Closing %s" % self.tmpfn)
+        logger.debug("Moving %s to %s" % (self.tmpfn, self.fn))
+        shutil.move(self.tmpfn, self.fn)
 
     def validate(self):
         status=True
@@ -275,12 +284,14 @@ class stats(object):
         self.quips=0
         self.files=0
         self.tarfiles=0
+        self.runs=0
         
     def comb(self, other):
         self.bytes+=other.bytes
         self.quips+=other.quips
         self.files+=other.files
         self.tarfiles+=other.tarfiles
+        self.runs+=other.runs
 
 ''' encapsulates a validation task.  We may parallelize these similar to quipjobs in the future 
 Most files are validated by simply comparing the first portion of the file from both the archive and the original.
@@ -379,6 +390,7 @@ class quipjob(threading.Thread):
 
     def finish(self, runstats):
         if not o.dryrun:
+            logger.debug("Adding Quip %s" % self.tmpfp.name)
             self.tarp.add(self.tmpfp.name, self.fn, self.tn)
 
         runstats.bytes+=self.true_sz; runstats.files+=1; runstats.quips+=1
@@ -475,6 +487,9 @@ def makeTarball(top, arcdir, name, runstats):
     processJobs(fastqs, o.maxthds, runstats)
     runstats.tarfiles+=1
 
+    if not o.dryrun:
+        tfp.finalize()
+
     if not o.dryrun and o.validate:
         tfp.validate()
     
@@ -505,9 +520,11 @@ def archiveRun(rundir, arcdir):
         logger.debug('makedirs %s' % arcdir)
         if not o.dryrun: os.makedirs(arcdir)
 
+    runstats.runs=1
     # set up log file for this run 
     if not o.dryrun:
-        h=logging.FileHandler('%s/%s_%s_archive.log' % (arcdir, o.runname, time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())))
+        runLogFile='%s/%s_%s_archive.log' % (o.staging, o.runname, time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime()))
+        h=logging.FileHandler(runLogFile)
         h.setLevel(logging.DEBUG)
         h.setFormatter(formatter)
         logger.addHandler(h)
@@ -529,7 +546,9 @@ def archiveRun(rundir, arcdir):
     t=time.time()-starttime
     bw=float(runstats.bytes)/(1024.0**2)/t
     logger.info("All Done %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (runstats.tarfiles, runstats.files, runstats.quips, float(runstats.bytes)/1024**3, t, bw))
-    if not o.dryrun: logger.removeHandler(h)
+    if not o.dryrun: 
+        logger.removeHandler(h)
+        shutil.move(runLogFile, arcdir)
     return runstats
 
 if __name__=='__main__':
@@ -544,16 +563,17 @@ if __name__=='__main__':
     parser.add_argument("-t", "--tmpdir", dest="tmpdir", default="/tmp", help="where to create tmp files")
     parser.add_argument("-i", "--infile", dest="infile", help="file containing runs to archive")
     parser.add_argument("-r", "--rundir", dest="rundir", help="run directory")
-    parser.add_argument("-a", "--arcdir", dest="arcdir", default="/SAY/archive/YCGA-729009-YCGA/archive", help="archve directory")
+    parser.add_argument("-a", "--arcdir", dest="arcdir", default="/SAY/archive/YCGA-729009-YCGA-A2/archive", help="archive directory")
     parser.add_argument("--cuton", dest="cuton", help="date cuton; a run earlier than this 6 digit date will not be archived.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
     parser.add_argument("-c", "--cutoff", dest="cutoff", help="date cutoff; a run later than this will no be archived.  Similar to --cuton")
     parser.add_argument("-l", "--logfile", dest="logfile", default="archive", help="logfile prefix")
     parser.add_argument("--testlen", dest="testlen", type=int, default=10000, help="number of bytes to validate from each file")
     parser.add_argument("--maxthds", dest="maxthds", type=int, default=20, help="max threads")
     parser.add_argument("--maxsum", dest="maxsum", type=int, default=200, help="max memory to use (GBytes)")
-
+    parser.add_argument("--staging", dest="staging", default=tempfile.mkdtemp(prefix='/home/rdb9/scratch60/archive'), help="staging prefix of dir for tars and log file")
 
     o=parser.parse_args()
+
     starttime=time.time()
 
     # set up logging
@@ -644,4 +664,6 @@ if __name__=='__main__':
     t=time.time()-starttime
     bw=float(totalstats.bytes)/(1024.0**2)/t
 
-    logger.info("Archiving Finished %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (totalstats.tarfiles, totalstats.files, totalstats.quips, float(totalstats.bytes)/1024**3, t, bw))
+    logger.debug("Removing staging dir %s" % o.staging)
+    os.rmdir(o.staging)
+    logger.info("Archiving Finished %d Runs, %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.tarfiles, totalstats.files, totalstats.quips, float(totalstats.bytes)/1024**3, t, bw))

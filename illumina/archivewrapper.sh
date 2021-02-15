@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -c 20 --mem 120g 
+#SBATCH -c 20
 #SBATCH --mail-type end --mail-user robert.bjornson@yale.edu
 #SBATCH -J Archive
 
