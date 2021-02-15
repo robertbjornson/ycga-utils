@@ -35,7 +35,7 @@ if __name__=='__main__':
     parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=False, help="don't actually do anything")
     parser.add_argument("--fastqs", dest="fastqs", action="store_true", default=False, help="only tar *.fastq.gz files")
     parser.add_argument("--archPeriod", dest="archPeriod", type=int, default=30, help="waiting period for archiving")
-    parser.add_argument("--delPeriod", dest="delPeriod", type=int, default=365*2, help="waiting period for deletion")
+    parser.add_argument("--delPeriod", dest="delPeriod", type=int, default=365, help="waiting period for deletion")
     parser.add_argument("--nodel", dest="nodel", action="store_true", default=False, help="skip actual deletion, but do everything else")
     parser.add_argument("-l", "--logfile", dest="logfile", default="arch_del", help="logfile prefix")
 
@@ -77,14 +77,14 @@ if __name__=='__main__':
 
         if deltaT > o.archPeriod * secPerDay:
             if os.path.exists(finishFName):
-                logger.debug ("Not archiving %s, already done" % src)
+                logger.info ("Not archiving %s, already done" % src)
             else:
                 if os.path.exists(tarFName):
                     logger.error ("Not archiving %s, tar file %s exists without finish file" % (src, tarFName))
                     counter["partial"]+=1
                     continue # weird; tar file without finish file, don't delete
                 else:
-                    logger.debug ("archiving %s" % src)
+                    logger.info ("archiving %s" % src)
                     counter["archived"]+=1
                     if o.fastqs:
                         cmd="(find %(src)s -name \"*.fastq.gz\" | tar cf %(tarFName)s --files-from=- && touch \"%(finishFName)s\")" % locals()
@@ -95,10 +95,10 @@ if __name__=='__main__':
                     else:
                         runCmd(cmd)
         else:
-            logger.debug ("not archiving %s, too new" % src)
+            logger.info ("not archiving %s, too new" % src)
         if not o.nodel and deltaT > o.delPeriod * secPerDay:
             if os.path.exists(finishFName):
-                logger.debug ("deleting %s" % src)
+                logger.info ("deleting %s" % src)
                 counter["deleted"]+=1
                 cmd="rm -rf \"%s\"" % (src,)            
                 msg=deleteTmplt % {'date':(time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())), 'location':tarFName}
@@ -110,6 +110,6 @@ if __name__=='__main__':
             else:
                 logger.error ("not deleting %s, %s not found" % (src, finishFName))
         else:
-            logger.debug ("not deleting %s, too new" % src)
+            logger.info ("not deleting %s, too new" % src)
 
     summarize(counter)
