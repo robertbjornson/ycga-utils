@@ -1,4 +1,4 @@
-import argparse, os, datetime, time, logging, subprocess, sys
+import argparse, os, datetime, time, logging, subprocess, sys, string
 
 
 secPerDay=3600*24
@@ -38,7 +38,7 @@ if __name__=='__main__':
     parser.add_argument("--delPeriod", dest="delPeriod", type=int, default=365, help="waiting period for deletion")
     parser.add_argument("--nodel", dest="nodel", action="store_true", default=False, help="skip actual deletion, but do everything else")
     parser.add_argument("-l", "--logfile", dest="logfile", default="arch_del", help="logfile prefix")
-
+    parser.add_argument("--10x", dest="do10x", action="store_true", default=False, help="10x run dirs can have netid super-directories.  Decend one level")
     o=parser.parse_args()
 
     # set up logging
@@ -64,27 +64,46 @@ if __name__=='__main__':
     assert(os.path.isdir(o.archDir))
     now=time.time()
 
+    runs=[]
+    """ collect all runs to be examined into a list.  For 10x, if directory looks like
+    a netid, descend one level to the actual runs.  Runs contain just the dir or a dir/subdir
+    """
     for d in os.listdir(o.dir):
-        src=os.path.join(o.dir, d)
-        # skip files
-        if not os.path.isdir(src): continue
+        fd=os.path.join(o.dir, d)
+        if not os.path.isdir(fd): continue
+        if o.do10x and d[0] in string.ascii_letters:
+            for sd in os.listdir(fd):
+                fsd=os.path.join(fd, sd)
+                if not os.path.isdir(fsd): continue
+                runs.append([d, sd])
+        else:
+            runs.append(['.', d])
+
+    for newdir, d in runs:
+        src=os.path.join(o.dir, newdir, d)
+        archdir=os.path.join(o.archDir, newdir)
+
         ts=int(os.stat(src).st_mtime)
         deltaT=now-ts
 
-        tarFName=os.path.join(o.archDir, d)+".tar"
-        finishFName=os.path.join(o.archDir, d)+".finished"
+        tarFName=os.path.join(archdir, d)+".tar"
+        finishFName=os.path.join(archdir, d)+".finished"
         deletedFName=os.path.join(o.dir, d)+".deleted"
 
         if deltaT > o.archPeriod * secPerDay:
+            if not os.path.isdir(archdir):
+                logger.info(f"creating {archdir}")
+                if not o.dryrun: os.mkdir(archdir)
+
             if os.path.exists(finishFName):
-                logger.info ("Not archiving %s, already done" % src)
+                logger.debug ("Not archiving %s, already done" % src)
             else:
                 if os.path.exists(tarFName):
                     logger.error ("Not archiving %s, tar file %s exists without finish file" % (src, tarFName))
                     counter["partial"]+=1
                     continue # weird; tar file without finish file, don't delete
                 else:
-                    logger.info ("archiving %s" % src)
+                    logger.info (f"archiving {src} to {tarFName}")
                     counter["archived"]+=1
                     if o.fastqs:
                         cmd="(find %(src)s -name \"*.fastq.gz\" | tar cf %(tarFName)s --files-from=- && touch \"%(finishFName)s\")" % locals()
@@ -95,21 +114,23 @@ if __name__=='__main__':
                     else:
                         runCmd(cmd)
         else:
-            logger.info ("not archiving %s, too new" % src)
-        if not o.nodel and deltaT > o.delPeriod * secPerDay:
-            if os.path.exists(finishFName):
-                logger.info ("deleting %s" % src)
-                counter["deleted"]+=1
-                cmd="rm -rf \"%s\"" % (src,)            
-                msg=deleteTmplt % {'date':(time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())), 'location':tarFName}
-                if o.dryrun:
-                    logger.debug(cmd)
+            logger.debug ("not archiving %s, too new" % src)
+
+        if not o.nodel:
+            if not deltaT > o.delPeriod * secPerDay:
+                if os.path.exists(finishFName):
+                    logger.info ("deleting %s" % src)
+                    counter["deleted"]+=1
+                    cmd="rm -rf \"%s\"" % (src,)            
+                    msg=deleteTmplt % {'date':(time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())), 'location':tarFName}
+                    if o.dryrun:
+                        logger.debug(cmd)
+                    else:
+                        runCmd(cmd)
+                        open(deletedFName, "w").write(msg)
                 else:
-                    runCmd(cmd)
-                    open(deletedFName, "w").write(msg)
+                    logger.error ("not deleting %s, %s not found" % (src, finishFName))
             else:
-                logger.error ("not deleting %s, %s not found" % (src, finishFName))
-        else:
-            logger.info ("not deleting %s, too new" % src)
+                logger.debug ("not deleting %s, too new" % src)
 
     summarize(counter)
