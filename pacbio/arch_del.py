@@ -38,7 +38,7 @@ if __name__=='__main__':
     parser.add_argument("--delPeriod", dest="delPeriod", type=int, default=365, help="waiting period for deletion")
     parser.add_argument("--nodel", dest="nodel", action="store_true", default=False, help="skip actual deletion, but do everything else")
     parser.add_argument("-l", "--logfile", dest="logfile", default="arch_del", help="logfile prefix")
-    parser.add_argument("--10x", dest="do10x", action="store_true", default=False, help="10x run dirs can have netid super-directories.  Decend one level")
+    parser.add_argument("--descend", dest="descend", action="store_true", default=False, help="10x run dirs can have netid super-directories.  Descend one level")
     o=parser.parse_args()
 
     # set up logging
@@ -65,13 +65,13 @@ if __name__=='__main__':
     now=time.time()
 
     runs=[]
-    """ collect all runs to be examined into a list.  For 10x, if directory looks like
-    a netid, descend one level to the actual runs.  Runs contain just the dir or a dir/subdir
+    """ collect all runs to be examined into a list.  If descend is set, if directory looks like
+    a netid, descend one level to the actual runs.  Runs contains just the dir or a dir/subdir
     """
     for d in os.listdir(o.dir):
         fd=os.path.join(o.dir, d)
         if not os.path.isdir(fd): continue
-        if o.do10x and d[0] in string.ascii_letters:
+        if o.descend and d[0] in string.ascii_letters:
             for sd in os.listdir(fd):
                 fsd=os.path.join(fd, sd)
                 if not os.path.isdir(fsd): continue
@@ -117,7 +117,7 @@ if __name__=='__main__':
             logger.debug ("not archiving %s, too new" % src)
 
         if not o.nodel:
-            if not deltaT > o.delPeriod * secPerDay:
+            if deltaT > o.delPeriod * secPerDay:
                 if os.path.exists(finishFName):
                     logger.info ("deleting %s" % src)
                     counter["deleted"]+=1
