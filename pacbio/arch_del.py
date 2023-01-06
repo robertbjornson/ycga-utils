@@ -68,11 +68,18 @@ if __name__=='__main__':
     """ collect all runs to be examined into a list.  If descend is set, if directory looks like
     a netid, descend one level to the actual runs.  Runs contains just the dir or a dir/subdir
     """
-    for d in os.listdir(o.dir):
+    for d in sorted(os.listdir(o.dir)):
         fd=os.path.join(o.dir, d)
         if not os.path.isdir(fd): continue
         if o.descend and d[0] in string.ascii_letters:
-            for sd in os.listdir(fd):
+            # see if we already archived the parent, in which case we'll skip it
+            tarFName=os.path.join(o.archDir, d)+".tar"
+            finishFName=os.path.join(o.archDir, d)+".finished"
+            if os.path.exists(tarFName) and os.path.exists(finishFName):
+                logger.info("skipping %s, found parent tarball %s" % (d, tarFName))
+                continue
+
+            for sd in sorted(os.listdir(fd)):
                 fsd=os.path.join(fd, sd)
                 if not os.path.isdir(fsd): continue
                 runs.append([d, sd])
@@ -124,13 +131,13 @@ if __name__=='__main__':
                     cmd="rm -rf \"%s\"" % (src,)            
                     msg=deleteTmplt % {'date':(time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())), 'location':tarFName}
                     if o.dryrun:
-                        logger.debug(cmd)
+                        logger.info(cmd)
                     else:
                         runCmd(cmd)
                         open(deletedFName, "w").write(msg)
                 else:
                     logger.error ("not deleting %s, %s not found" % (src, finishFName))
             else:
-                logger.debug ("not deleting %s, too new" % src)
+                logger.info ("not deleting %s, too new" % src)
 
     summarize(counter)
