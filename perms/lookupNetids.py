@@ -46,6 +46,7 @@ def dump_table(tbl, fn):
         ofp.write(f'{l[2]},')
         ofp.write(f'{":".join(l[3])},,')
         ofp.write(f'{now},wikilims,\n')
+        
 
 if __name__=='__main__':
     wd=getWikilimsData()
