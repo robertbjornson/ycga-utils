@@ -26,7 +26,7 @@ int sanity_check_args(int argc, char *argv[])
 {
 
   int c;
-  while ((c = getopt (argc, argv, "bm")) != -1) ;
+  while ((c = getopt (argc, argv, "dbm")) != -1) ;
 
   if (argc-optind != 2) {
     printf("Error:Only single path supported\n");
