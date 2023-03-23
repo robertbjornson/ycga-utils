@@ -22,16 +22,29 @@ const char * pref[] =
    "/gpfs/ycga/project/lsprog/rdb9/repos/ycga-utils", //testing
   };      
 
+int numprefs = sizeof(pref)/sizeof(pref[0]);
+int numuids = sizeof(uids)/sizeof(uids[0]);
+
+// for now just check that there are only two args that aren't options
 int sanity_check_args(int argc, char *argv[])
 {
-
   int c;
+  // skip options
   while ((c = getopt (argc, argv, "dbm")) != -1) ;
 
   if (argc-optind != 2) {
     printf("Error:Only single path supported\n");
     exit(1);
   }
+}
+
+void usage() {
+  printf("Usage: execsetfacl [opts] perm path\n");
+  printf("Allowed paths:\n");
+  for (int i=0; i<numprefs; ++i) printf("\t%s\n", pref[i]);
+  printf("Allowed uids:\n");
+  for (int i=0; i<numuids; ++i) printf("\t%d\n", uids[i]);
+  exit(0);
 }
 
 int main(int argc, char *argv[])
@@ -42,10 +55,14 @@ int main(int argc, char *argv[])
     int ok;
     int me;
 
-    sanity_check_args(argc, argv);
-    int numprefs = sizeof(pref)/sizeof(pref[0]);
-    int numuids = sizeof(uids)/sizeof(uids[0]);
+    if (argc==1) {
+      usage();
+      exit(0);
+    }
     
+    sanity_check_args(argc, argv);
+
+    // convert path to true path
     pth=argv[argc-1];
     truepth=realpath(pth, 0);
     if (truepth==NULL) {
@@ -53,7 +70,7 @@ int main(int argc, char *argv[])
       exit(1);
     }
 
-    // Test uid
+    // Test true uid
     ok=0;
     me=getuid();
     for (int i=0; i<numuids; i++) {
