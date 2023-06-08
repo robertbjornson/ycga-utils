@@ -1,4 +1,8 @@
 '''
+This script examines a number of illumina runs, and attempts to archive selected runs to another
+directory as a set of tarballs.  One tarball is made for each "project", and one main tarball
+is made for everything else.
+
 Todo
 - DONE avoid clobbering project tars if multiple projects of same name exist in tree
 - LATER change owner of project tars to pi and pi group, chmod to 440
@@ -35,6 +39,7 @@ python archive.py [-n] -v -r /ycga-gpfs/sequencers/illumina/sequencerY/runs/1610
 '''
 
 import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil
+from functools import reduce
 
 QUIP='/ycga-gpfs/apps/hpc/Tools/quip/1.1.8/bin/quip'
 
@@ -67,12 +72,14 @@ Plots$
 Stats$
 SignalMeans$
 L00\d$
+QC
 '''
 ignoreDirsPat=re.compile('|'.join(ignoredirs.split()))
 
 # Files matching these patterns will not be archived
 ignorefiles='''s_+.+_anomaly.txt$
 s_+.+_reanomraw.txt$
+Undetermined_.+R[12].+fastq.gz$
 '''
 ignoreFilesPat=re.compile('|'.join(ignorefiles.split()))
 
@@ -331,9 +338,10 @@ class validatejob(object):
             if self.fn.endswith(".gz"):
                 #str1orig=gzip.open(self.fn).read(self.testlen*2)
                 #str1=self.fixFastqFormat(str1orig, self.testlen)
-                h1=hashlib.md5(self.fixFastqFormat(gzip.open(self.fn).read(self.testlen*2), self.testlen)).hexdigest()
+                ##FIX
+                h1=hashlib.md5(self.fixFastqFormat(gzip.open(self.fn).read(self.testlen*2).decode('utf-8'), self.testlen).encode('utf-8')).hexdigest()
             else:
-                h1=hashlib.md5(self.fixFastqFormat(open(self.fn).read(self.testlen*2), self.testlen)).hexdigest()
+                h1=hashlib.md5(self.fixFastqFormat(     open(self.fn).read(self.testlen*2).decode('utf-8'), self.testlen).encode('utf-8')).hexdigest()
                 #str1=self.fixFastqFormat(open(self.fn).read(self.testlen*2), self.testlen)
 
             #h1=hashlib.md5(str1).hexdigest()
@@ -347,7 +355,7 @@ class validatejob(object):
             self.status=h1==h2
         else:
             # just compare files as is
-            h1=hashlib.md5(open(self.fn).read(self.testlen)).hexdigest()
+            h1=hashlib.md5(open(self.fn, 'rb').read(self.testlen)).hexdigest()
             s1=os.path.getsize(self.fn)
             h2=hashlib.md5(tfp.extractfile(self.tn).read(self.testlen)).hexdigest()
             s2=tfp.getmember(self.tn).size
@@ -379,7 +387,9 @@ class quipjob(threading.Thread):
 
     def run(self):
         self.tmpfp=tempfile.NamedTemporaryFile(dir=o.tmpdir)
-        cmd='%s -c %s > %s' % (QUIP, self.fn, self.tmpfp.name)
+        ## new way!
+        cmd='/opt/slurm/current/bin/srun --het-group=1 -N 1 -n 1 -c 1 %s -c %s > %s' % (QUIP, self.fn, self.tmpfp.name)
+        #cmd='%s -c %s > %s' % (QUIP, self.fn, self.tmpfp.name)
         logger.debug("running %s" % cmd) 
         if not o.dryrun: 
             self.status=subprocess.call(cmd, shell=True)
@@ -418,9 +428,9 @@ def processJobs(jobs, maxthds, runstats):
             job=pending.pop(0)
             currsum += job.est_sz
             job.starttime=time.time()
-            logger.debug("starting job %s currsum is %d" % (job, currsum))
             job.start()
             running.append(job)
+            logger.debug("starting job %s running %d currsum is %d pending" % (job, len(running), currsum, len(pending)))
 
         # wait for the first job to finish and handle it
         waitjob=running.pop(0)
@@ -451,7 +461,7 @@ We will also create a log file and a finished file.  Thus:
   141215_M01156_0172_000000000-AAR3L_finished.txt
 
 '''
-def makeTarball(top, arcdir, name, runstats):
+def makeTarball(top, arcdir, name, tfpl, fastql, runstats):
 
     tfname="%s/%s.tar" % (arcdir, name % runstats.tarfiles)
     if os.path.exists(tfname) and not o.force: error("%s exists, use -f to force" % tfname)
@@ -467,7 +477,7 @@ def makeTarball(top, arcdir, name, runstats):
         files.sort()
         projects=prunedirs(dirname, dirs)
         for proj, unalignedDir in projects:
-            makeTarball(dirname+'/'+proj, arcdir, "%s_%%s_%s_%s" % (o.runname, unalignedDir, proj), runstats)
+            makeTarball(dirname+'/'+proj, arcdir, "%s_%%s_%s_%s" % (o.runname, unalignedDir, proj), tfpl, fastql, runstats)
             
         fastqs+=handlefiles(dirname, files, tfp)
 
@@ -484,14 +494,17 @@ def makeTarball(top, arcdir, name, runstats):
             if not o.dryrun: 
                 tfp.add(fp)
 
-    processJobs(fastqs, o.maxthds, runstats)
+    tfpl.append(tfp)
+    fastql.extend(fastqs)
+    
+    #processJobs(fastqs, o.maxthds, runstats)
     runstats.tarfiles+=1
 
-    if not o.dryrun:
-        tfp.finalize()
-
-    if not o.dryrun and o.validate:
-        tfp.validate()
+    #if not o.dryrun:
+    #    tfp.finalize()
+    #
+    #if not o.dryrun and o.validate:
+    #    tfp.validate()
     
 '''
 rundir: path to run, starting with ?.  E.g. 
@@ -507,6 +520,9 @@ def archiveRun(rundir, arcdir):
     arcdir=os.path.abspath(arcdir)
     o.finished='%s/%s_finished.txt' % (arcdir, o.runname)
 
+    tfpl=[]
+    fastql=[]
+    
     if os.path.exists(arcdir):
         if o.force: 
             logger.warning("%s exists, forcing overwrite" % o.finished)
@@ -540,8 +556,20 @@ def archiveRun(rundir, arcdir):
     # cd to dir above rundir
     os.chdir(rundir); os.chdir('..')
 
-    makeTarball(o.runname, arcdir, "%s_%%s" % o.runname, runstats)
+    makeTarball(o.runname, arcdir, "%s_%%s" % o.runname, tfpl, fastql, runstats)
 
+    # all the jobs in the Run
+
+    logger.debug("Processing %d quip jobs" % len(fastql)) 
+    processJobs(fastql, o.maxthds, runstats)
+
+    for tfp in tfpl:
+        if not o.dryrun:
+            tfp.finalize()
+    
+        if not o.dryrun and o.validate:
+            tfp.validate()
+    
     if not o.dryrun: open(o.finished, 'w').close()
     t=time.time()-starttime
     bw=float(runstats.bytes)/(1024.0**2)/t
@@ -592,6 +620,10 @@ if __name__=='__main__':
     logger.addHandler(hf)
 
     # do some validation
+    # make sure arcdir exists
+    if not os.path.isdir(o.arcdir):
+        error("Arcdir %s not found" % o.arcdir)
+        
     # require exactly one of -r, --automatic, -i
     if countTrue(o.rundir, o.automatic, o.infile) != 1:
         error("Must specify exactly one of -r --automatic -i")
