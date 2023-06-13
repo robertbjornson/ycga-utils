@@ -430,7 +430,7 @@ def processJobs(jobs, maxthds, runstats):
             job.starttime=time.time()
             job.start()
             running.append(job)
-            logger.debug("starting job %s running %d currsum is %d pending" % (job, len(running), currsum, len(pending)))
+            logger.debug("starting job %s running %d currsum is %d pending %d" % (job, len(running), currsum, len(pending)))
 
         # wait for the first job to finish and handle it
         waitjob=running.pop(0)
