@@ -40,6 +40,7 @@ python archive.py [-n] -v -r /ycga-gpfs/sequencers/illumina/sequencerY/runs/1610
 
 import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil
 from functools import reduce
+import arrayIF
 
 QUIP='/ycga-gpfs/apps/hpc/Tools/quip/1.1.8/bin/quip'
 
@@ -385,10 +386,14 @@ class quipjob(threading.Thread):
     def __str__(self):
         return "Quip Job "+self.fn
 
-    def run(self):
+    def getCmd(self):
         self.tmpfp=tempfile.NamedTemporaryFile(dir=o.tmpdir)
+        cmd='%s -c %s > %s' % (QUIP, self.fn, self.tmpfp.name)
+        return cmd
+    
+    def run(self):
         ## new way!
-        cmd='/opt/slurm/current/bin/srun --het-group=1 -N 1 -n 1 -c 1 %s -c %s > %s' % (QUIP, self.fn, self.tmpfp.name)
+        cmd=getCmd()
         #cmd='%s -c %s > %s' % (QUIP, self.fn, self.tmpfp.name)
         logger.debug("running %s" % cmd) 
         if not o.dryrun: 
@@ -561,7 +566,16 @@ def archiveRun(rundir, arcdir):
     # all the jobs in the Run
 
     logger.debug("Processing %d quip jobs" % len(fastql)) 
-    processJobs(fastql, o.maxthds, runstats)
+    #processJobs(fastql, o.maxthds, runstats)
+
+    quipcmds=[j.getCmd() for j in fastql]
+    logger.debug(str(quipcmds))
+    rc=arrayIF.runJobs(quipcmds, o)
+    if rc!=0:
+        error("runJobs failed")
+    
+    for j in fastql:
+        j.finish(runstats)
 
     for tfp in tfpl:
         if not o.dryrun:
@@ -598,8 +612,9 @@ if __name__=='__main__':
     parser.add_argument("--testlen", dest="testlen", type=int, default=10000, help="number of bytes to validate from each file")
     parser.add_argument("--maxthds", dest="maxthds", type=int, default=20, help="max threads")
     parser.add_argument("--maxsum", dest="maxsum", type=int, default=200, help="max memory to use (GBytes)")
+    parser.add_argument("--maxtime", dest="maxtime", default="1-0", help="job array time limit")
     parser.add_argument("--staging", dest="staging", default=tempfile.mkdtemp(prefix='/home/rdb9/scratch60/archive'), help="staging prefix of dir for tars and log file")
-
+    parser.add_argument("--noclean", dest="clean", action="store_false", default=True, help="clean up temp files and dirs")
     o=parser.parse_args()
 
     starttime=time.time()
@@ -696,6 +711,7 @@ if __name__=='__main__':
     t=time.time()-starttime
     bw=float(totalstats.bytes)/(1024.0**2)/t
 
-    logger.debug("Removing staging dir %s" % o.staging)
-    os.rmdir(o.staging)
+    if o.clean:
+        logger.debug("Removing staging dir %s" % o.staging)
+        os.rmdir(o.staging)
     logger.info("Archiving Finished %d Runs, %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.tarfiles, totalstats.files, totalstats.quips, float(totalstats.bytes)/1024**3, t, bw))
