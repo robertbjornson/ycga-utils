@@ -5,13 +5,28 @@ from multiprocessing import Pool
 
 import listTree
 
+'''
+The novaseqX uses 8 digits for the timestamp in the flowcell name, e.g. 20230808_, where as
+earlier machines used 6.  
+'''
+def getRundate(run):
+    mo=re.match('^(\d+)_',run)
+    if not mo:
+        error('bad rundate')
+    datestr=mo.group(1)    
+    if len(datestr)==8:
+        return datestr[2:]
+    else:
+        return datestr
+
 ''' This function takes a run name and uses the date component of the name to determine whether
 it is earlier than the cutoff date
 ''' 
 def fltr(r):
     rn=os.path.basename(r)
+    rundate=getRundate(rn)
     try:
-        return int(rn[:6]) < o.cutoff
+        return int(rundate) < o.cutoff
     except:
         logger.error("weirdly named run: %s" % r)
         return False
@@ -29,7 +44,7 @@ equiv=(
     ("/ycga-gpfs/sequencers/panfs/", "/SAY/archive/YCGA-729009-YCGA/archive/panfs/"),
     ("/ycga-gpfs/sequencers/panfs/sequencers1/", "/SAY/archive/YCGA-729009-YCGA/archive/panfs/sequencers/"),
     ("/ycga-ba/", "/SAY/archive/YCGA-729009-YCGA/archive/ycga-ba/"),
-    ("/ycga-gpfs/sequencers/illumina/", "/SAY/archive/YCGA-729009-YCGA/archive/ycga-gpfs/sequencers/illumina/")
+    ("/ycga-gpfs/sequencers/illumina/", "/SAY/archive/YCGA-729009-YCGA-A2/archive/ycga-gpfs/sequencers/illumina/")
 )
 
 
@@ -147,20 +162,20 @@ if __name__=='__main__':
 
     for r in delruns:
         outbuf=io.StringIO()
-        logger.info("Checking %s" % r)
+        logger.debug("Checking %s" % r)
         if os.path.islink(r):
-            logger.info("Skipping softlink %s" % (r,))
+            logger.debug("Skipping softlink %s" % (r,))
             continue
         if r.endswith(".DELETED") or r.endswith(".deleted") or (o.dryrun and os.path.exists(os.path.basename(r)+".DELETED")):
             # when dryrunning, .DELETED would be in current dir
-            logger.info("Previously deleted %s" % (r,))
+            logger.debug("Previously deleted %s" % (r,))
             deletedcnt+=1
             # already deleted
             continue
         # any NODELETE* file in run dir prevents deletion
         ndels=glob.glob(os.path.join(r, "NODELETE*"))
         if ndels:
-            logger.info("NODELETE(s) %s found in %s, skipping" % (" ".join(ndels), r))
+            logger.debug("NODELETE(s) %s found in %s, skipping" % (" ".join(ndels), r))
             nodeletecnt+=1
             continue
         a=chkArchive(r)
@@ -172,7 +187,7 @@ if __name__=='__main__':
             logger.info("Deleting %s" % (r,))
             if o.interactive:
                 print ("Go ahead [Yn]?")
-                resp=input()
+                resp=eval(input())
                 if resp.lower()!='y': continue
 
             ''' trashdir is the location of the FC dir in trash.  It should not already exist'''

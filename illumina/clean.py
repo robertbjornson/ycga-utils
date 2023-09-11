@@ -1,5 +1,6 @@
 
 import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil
+from functools import reduce
 
 
 epilog="epilog"
@@ -51,9 +52,13 @@ undet_pat=re.compile('.*Undetermined_.*\d\d\d.fastq.gz$')
 def cleanRun(rundir):
     s=stats(os.path.basename(rundir))
 
+    if glob.glob("%s/Data/Intensities/BaseCalls/NOCLEAN" % rundir):
+        logger.info("Not cleaning %s, NOCLEAN file found" % rundir)
+        return s
+        
     if o.checkUnaligned and not glob.glob("%s/Data/Intensities/BaseCalls/Unaligned*" % rundir):
         # check for an "Unaligned" dir as a sanity check.  Don't do anything if it doesn't exist
-        logger.warning("Not cleaning %s, no Unaligned found" % rundir)
+        logger.debug("Not cleaning %s, no Unaligned found" % rundir)
         return s
 
     logger.debug("Cleaning %s" % rundir)
@@ -82,12 +87,12 @@ def cleanRun(rundir):
     
     # remove all undetermined_ files
     fs=0; bs=0 
-    logger.info("removing undetermined files")
+    logger.debug("removing undetermined files")
     for f in findFiles("%s/Data/Intensities/BaseCalls" % (rundir,), undet_pat):
-	logger.debug("Delete %s" % f)
+        logger.debug("Delete %s" % f)
         fs+=1; bs+=os.path.getsize(f)
-	if not o.dryrun: 
-	    os.remove(f)
+        if not o.dryrun: 
+            os.remove(f)
     s.add(fs, bs)
 
     logger.info(s)
@@ -145,7 +150,7 @@ class cleanjob(threading.Thread):
                 self.runner.running.remove(self)
                 self.runner.done.add(self)
                 self.runner.donecnt.release()
-            logger.info("%s Finished" % self)
+            logger.debug("%s Finished" % self)
 
     def finish(self, totalstats):
         if self.status==0:
@@ -324,6 +329,10 @@ if __name__=='__main__':
 
     cleanjobs=[]
     for run in runs:
+        if run.endswith(".DELETED"):
+            logger.debug("%s deleted, skipping" % run)
+            continue
+
         rundate=os.path.basename(run)[0:6]
         if o.cutoff < rundate:
             logger.debug("%s too recent" % run)

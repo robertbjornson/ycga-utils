@@ -42,7 +42,7 @@ import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, thre
 from functools import reduce
 import arrayIF
 
-QUIP='/ycga-gpfs/apps/hpc/Tools/quip/1.1.8/bin/quip'
+QUIP='/vast/palmer/apps/avx2/software/Quip/1.1.8-GCCcore-10.2.0/bin/quip'
 
 # Directories matching these patterns, and everything below them, will not be archived
 ignoredirs='''Aligned\S*$
@@ -569,13 +569,13 @@ def archiveRun(rundir, arcdir):
     #processJobs(fastql, o.maxthds, runstats)
 
     quipcmds=[j.getCmd() for j in fastql]
-    logger.debug(str(quipcmds))
-    rc=arrayIF.runJobs(quipcmds, o)
-    if rc!=0:
-        error("runJobs failed")
+    if not o.dryrun:
+        rc=arrayIF.runJobs(quipcmds, o)
+        if rc!=0:
+            error("runJobs failed")
     
-    for j in fastql:
-        j.finish(runstats)
+        for j in fastql:
+            j.finish(runstats)
 
     for tfp in tfpl:
         if not o.dryrun:
@@ -593,6 +593,21 @@ def archiveRun(rundir, arcdir):
         shutil.move(runLogFile, arcdir)
     return runstats
 
+'''
+The novaseqX uses 8 digits for the timestamp in the flowcell name, e.g. 20230808_, where as
+earlier machines used 6.  
+'''
+
+def getRundate(run):
+    mo=re.match('^(\d+)_',run)
+    if not mo:
+        error('bad rundate')
+    datestr=mo.group(1)    
+    if len(datestr)==8:
+        return datestr[2:]
+    else:
+        return datestr
+    
 if __name__=='__main__':
 
     parser=argparse.ArgumentParser(epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -602,7 +617,7 @@ if __name__=='__main__':
     parser.add_argument("--novalidate", dest="validate", action="store_false", default=True, help="don't validate")
     parser.add_argument("-p", "--projecttars", dest="projecttars", action="store_true", default=True, help="put projects into separate tars")
     parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force to overwrite tar or finished files")
-    parser.add_argument("-t", "--tmpdir", dest="tmpdir", default="/tmp", help="where to create tmp files")
+    parser.add_argument("-t", "--tmpdir", dest="tmpdir", default="/vast/palmer/scratch/support/rdb9/tmpdir", help="where to create tmp files")
     parser.add_argument("-i", "--infile", dest="infile", help="file containing runs to archive")
     parser.add_argument("-r", "--rundir", dest="rundir", help="run directory")
     parser.add_argument("-a", "--arcdir", dest="arcdir", default="/SAY/archive/YCGA-729009-YCGA-A2/archive", help="archive directory")
@@ -613,7 +628,7 @@ if __name__=='__main__':
     parser.add_argument("--maxthds", dest="maxthds", type=int, default=20, help="max threads")
     parser.add_argument("--maxsum", dest="maxsum", type=int, default=200, help="max memory to use (GBytes)")
     parser.add_argument("--maxtime", dest="maxtime", default="1-0", help="job array time limit")
-    parser.add_argument("--staging", dest="staging", default=tempfile.mkdtemp(prefix='/home/rdb9/scratch60/archive'), help="staging prefix of dir for tars and log file")
+    parser.add_argument("--staging", dest="staging", default=tempfile.mkdtemp(prefix='/vast/palmer/scratch/support/rdb9/archive'), help="staging prefix of dir for tars and log file")
     parser.add_argument("--noclean", dest="clean", action="store_false", default=True, help="clean up temp files and dirs")
     o=parser.parse_args()
 
@@ -688,7 +703,8 @@ if __name__=='__main__':
         if run.endswith(".deleted"):
             logger.debug("Skipping %s: deleted", run) 
             continue
-        rundate=os.path.basename(run)[0:6]
+        rundate=getRundate(os.path.basename(run))
+        #rundate=os.path.basename(run)[0:6]
         if o.cuton and rundate < o.cuton:
             logger.debug("Skipping %s: earlier than cuton" % run)
             continue
@@ -713,5 +729,5 @@ if __name__=='__main__':
 
     if o.clean:
         logger.debug("Removing staging dir %s" % o.staging)
-        os.rmdir(o.staging)
+        shutil.rmtree(o.staging)
     logger.info("Archiving Finished %d Runs, %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.tarfiles, totalstats.files, totalstats.quips, float(totalstats.bytes)/1024**3, t, bw))
