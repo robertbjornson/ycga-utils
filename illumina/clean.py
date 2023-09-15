@@ -249,6 +249,22 @@ def processJobs(jobs, maxthds, totalstats):
         del waitjob
 '''
 
+'''
+The novaseqX uses 8 digits for the timestamp in the flowcell name, e.g. 20230808_, where as
+earlier machines used 6.  
+'''
+
+def getRundate(run):
+    mo=re.match('^(\d+)_',run)
+    if not mo:
+        error('bad rundate')
+    datestr=mo.group(1)    
+    if len(datestr)==8:
+        return datestr[2:]
+    else:
+        return datestr
+    
+
 if __name__=='__main__':
 
     parser=argparse.ArgumentParser(epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -333,7 +349,7 @@ if __name__=='__main__':
             logger.debug("%s deleted, skipping" % run)
             continue
 
-        rundate=os.path.basename(run)[0:6]
+        rundate=getRundate(os.path.basename(run))
         if o.cutoff < rundate:
             logger.debug("%s too recent" % run)
             continue
