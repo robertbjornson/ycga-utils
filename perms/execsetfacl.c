@@ -12,7 +12,7 @@ written by robert.bjornson@yale.edu
 */
 
 // only these users may run the program
-const int uids[] = {10017, 11851, 12107, 10973}; // rdb9, ccc7, jk2269, gw92
+const int uids[] = {10017, 11851, 12107, 10973, 20473}; // rdb9, ccc7, jk2269, gw92, lam244
 
 // Only locations under these prefixes are allowed.  Make sure to use the true path.
 const char * pref[] =
