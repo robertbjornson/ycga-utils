@@ -1,4 +1,4 @@
-import logging, globus_sdk, random, sys
+import logging, globus_sdk, random, sys, os, tempfile
 from globus_sdk import TransferAPIError
 
 class client(object):
@@ -30,7 +30,6 @@ class client(object):
     def exists(self, f):
         try:
             stat=self.tc.operation_stat(self.remote_collection_id, f)
-            self.logger.debug(f'exists returned {stat}')
             return True
         except TransferAPIError:
             return False
@@ -38,29 +37,45 @@ class client(object):
     def moveFile(self, src_file, dest_file):
         
         task_data = globus_sdk.TransferData(source_endpoint=self.local_collection_id, destination_endpoint=self.remote_collection_id, verify_checksum=True)
-
+        filesize=os.path.getsize(src_file)
+        
         # because the globus share is rooted at /home/rdb9/palmer_scratch/staging/, we need to remove that prefix from the src_file!
         src_file=src_file.replace('/home/rdb9/palmer_scratch/staging/', '') ## NOT Quite, fix
         self.logger.debug(f"adding {src_file}, {dest_file}")
         task_data.add_item(src_file, dest_file)
 
         # submit, getting back the task ID
-        self.logger.debug(f"submitting transfer {src_file}, {dest_file}")
+        self.logger.debug(f"submitting transfer {src_file}, {dest_file}, size {filesize}")
         task_doc = self.tc.submit_transfer(task_data)
         task_id = task_doc["task_id"]
-        
+
+        prevsize=0; size=0
         self.logger.debug(f"waiting on {task_id}")
         while not self.tc.task_wait(task_id, timeout=60):
-            self.logger.debug(f"waiting on {task_id}")
-        self.logger.debug("Finished")
+            try:
+                stat=self.tc.operation_stat(dest_collection_id, f"/{dest_file}")
+                size=stat["size"]
+            except:
+                self.logger.debug("huh")
+            self.logger.debug(f"waiting on {task_id}: current size {size}")
+            self.logger.debug
+            if not size>prevsize:
+                self.logger.error(f"{dest_file} not growing!")
 
+        self.logger.debug("Finished")
+        
     def getHead(self, obj):
         return False
 
+    ''' not used
     def touch(self, fn):
         self.logger.debug(f"touching {fn}")
-        return self.moveFile('dummy.txt', fn)
-        
+        tf = tempfile.NamedTemporaryFile()
+        ret = self.moveFile(tf.name, fn)
+        tf.close()
+        return ret
+    '''
+    
     def mkDir(self, path): # not needed in S3
         try:
             self.tc.operation_mkdir(self.remote_collection_id, path)

@@ -62,8 +62,8 @@ python archive.py [-n] -v -r /ycga-gpfs/sequencers/illumina/sequencerY/runs/1610
 
 import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil
 
-#import S3Interface, CS
 import GlobusInterface
+import S3Interface
 
 # Directories matching these patterns, and everything below them, will not be archived
 ignoredirs=r'''Aligned\\S*$
@@ -175,18 +175,27 @@ class tarwrapper(object):
             arcname=name
         if arcname in self.added:
             error("Attempting to overwrite %s in %s" % (arcname, self.fn))
-        logger.debug("Adding %s" % name)
         self.tfp.add(name, arcname)
         self.added.add(arcname)
         self.check.append(validatejob(origname, arcname, o.testlen))
 
-    def finalize(self):
+    def finalize(self, archivers):
         self.tfp.close()
         logger.debug("Closing %s" % self.tmpfn)
+        if o.encrypt:
+            cmd=f"gpg --batch --passphrase-file /home/rdb9/.ssh/gpg.txt --symmetric < {self.tmpfn} > {self.tmpfn}.enc"
+            logger.debug(f"encrypting: {cmd}")
+            ret=subprocess.run(cmd, shell=True)
+            if ret.returncode:
+                error("encryption failed")
+            self.tmpfn=f"{self.tmpfn}.enc"
+            self.fn=f'{self.fn}.enc'
         logger.debug("Moving %s to %s" % (self.tmpfn, self.fn))
-        Archiver.moveFile(self.tmpfn, self.fn) 
+        ''' for all archivers '''
+        for a in archivers:
+            a.moveFile(self.tmpfn, self.fn) 
 
-    def validate(self):
+    def validate(self, archivers):
         return True  ## FIX
         self.tfp.close()
         objhead=Archiver.getHead(self.fn)
@@ -255,6 +264,7 @@ class stats(object):
         self.files=0
         self.tarfiles=0
         self.runs=0
+        self.errors=0
         
     def comb(self, other):
         self.bytes+=other.bytes
@@ -262,6 +272,7 @@ class stats(object):
         self.files+=other.files
         self.tarfiles+=other.tarfiles
         self.runs+=other.runs
+        self.errors+=other.errors
 
 ''' encapsulates a validation task.  We may parallelize these similar to quipjobs in the future 
 Most files are validated by simply comparing the first portion of the file from both the archive and the original.
@@ -296,10 +307,17 @@ We will also create a log file and a finished file.  Thus:
   141215_M01156_0172_000000000-AAR3L_finished.txt
 
 '''
-def makeTarball(top, arcdir, name, runstats):
+def makeTarball(top, arcdir, name, TodoArchivers, runstats):
 
     tfname="%s/%s.tar" % (arcdir, name % runstats.tarfiles)
-    if Archiver.exists(tfname) and not o.force: error("%s exists, use -f to force" % tfname)
+    if not o.force:
+        ''' this shouldn't really happen, start + finish testing should handle this '''
+        for a in TodoArchivers:
+            if a.exists(tfname):
+                logger.error(f"Archiver {a} found existing {tfname}")
+                runstats.errors+=1
+                return runstats
+            
     logger.debug("creating tarfile %s" % tfname) 
     if o.dryrun:
         tfp=None
@@ -315,7 +333,7 @@ def makeTarball(top, arcdir, name, runstats):
         # 2)removes and return a list of dirs that look like projects, which will be handled in a separate tarballs
         projects=prunedirs(dirname, dirs)
         for proj, unalignedDir in projects:
-            makeTarball(dirname+'/'+proj, arcdir, "%s_%%s_%s_%s" % (o.runname, unalignedDir, proj), runstats)
+            makeTarball(dirname+'/'+proj, arcdir, "%s_%%s_%s_%s" % (o.runname, unalignedDir, proj), TodoArchivers, runstats)
 
         files=prunefiles(dirname, files)        
         # add the remaining keepers
@@ -334,10 +352,10 @@ def makeTarball(top, arcdir, name, runstats):
     runstats.tarfiles+=1
 
     if not o.dryrun:
-        tfp.finalize()
+        tfp.finalize(TodoArchivers)
 
     if not o.dryrun and o.validate:
-        tfp.validate()
+        tfp.validate(TodoArchivers)
     
 '''
 rundir: path to run, starting with ?.  E.g. 
@@ -351,22 +369,32 @@ def archiveRun(rundir, arcdir):
     starttime=time.time()
 
     ## arcdir=os.path.abspath(arcdir) ## not needed
+    o.dummy=tempfile.NamedTemporaryFile(dir=o.staging)
     o.started='%s/%s_started.txt' % (arcdir, o.runname)
     o.finished='%s/%s_finished.txt' % (arcdir, o.runname) 
-
-    if Archiver.exists(o.started): # need to fix since dirs don't exist in S3  HERE
-        if o.force: 
-            logger.warning("%s exists, forcing overwrite" % o.finished)
-        else:
-            if Archiver.exists(o.finished): 
-                logger.debug("%s appears finished, skipping" % arcdir)
-                return runstats
-            else:
-                error("Partial archive of %s exists" % arcdir)
+    
+    if o.force:
+        TodoArchivers=Archivers
     else:
-        logger.debug('getting started %s' % arcdir)  
-        if not o.dryrun:
-            Archiver.touch(o.started)
+        TodoArchivers=[]
+        for a in Archivers:
+            if a.exists(o.finished):
+                logger.debug("%s appears finished, skipping" % arcdir)
+            elif a.exists(o.started):
+                logger.error("Partial archive of %s exists" % arcdir)
+                runstats.errors+=1 
+            else:
+                TodoArchivers.append(a)
+
+    if not TodoArchivers:
+        logger.debug('nothing to do for this run')
+        return runstats
+    else:
+        logger.debug(f'getting started {arcdir}.  Archivers {TodoArchivers}')  
+
+    if not o.dryrun:
+        for a in TodoArchivers:
+            a.moveFile(o.dummy.name, o.started)
 
     runstats.runs=1
     # set up log file for this run 
@@ -389,16 +417,19 @@ def archiveRun(rundir, arcdir):
     # cd to dir above rundir
     os.chdir(rundir); os.chdir('..')
 
-    makeTarball(o.runname, arcdir, "%s_%%s" % o.runname, runstats)
+    makeTarball(o.runname, arcdir, "%s_%%s" % o.runname, TodoArchivers, runstats)
 
-    if not o.dryrun: 
-        Archiver.touch(o.finished)
+    if not o.dryrun:
+        for a in TodoArchivers:
+            a.moveFile(o.dummy.name,o.finished)
+
     t=time.time()-starttime
     bw=float(runstats.bytes)/(1024.0**2)/t
     logger.info("All Done %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (runstats.tarfiles, runstats.files, runstats.quips, float(runstats.bytes)/1024**3, t, bw))
     if not o.dryrun: 
         logger.removeHandler(h)
-        Archiver.moveFile(runLogFile, f'{arcdir}/{runLogFileBN}') 
+        for a in TodoArchivers:
+            a.moveFile(runLogFile, f'{arcdir}/{runLogFileBN}') 
     return runstats
 
 '''
@@ -425,6 +456,7 @@ if __name__=='__main__':
     parser.add_argument("--novalidate", dest="validate", action="store_false", default=True, help="don't validate")
     parser.add_argument("-p", "--projecttars", dest="projecttars", action="store_true", default=True, help="put projects into separate tars")
     parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force to overwrite tar or finished files")
+    parser.add_argument("--noencrypt", dest="encrypt", action="store_false", default=True, help="encrypt tar files")
     parser.add_argument("-t", "--tmpdir", dest="tmpdir", default="/tmp", help="where to create tmp files")
     parser.add_argument("-i", "--infile", dest="infile", help="file containing runs to archive")
     parser.add_argument("-r", "--rundir", dest="rundir", help="run directory")
@@ -443,7 +475,7 @@ if __name__=='__main__':
 
     # set up logging
     logger=logging.getLogger('archive')
-    formatter=logging.Formatter("%(asctime)s %(threadName)s %(levelname)s %(message)s")
+    formatter=logging.Formatter("%(asctime)s %(filename)s %(lineno)d %(levelname)s %(message)s")
     logger.setLevel(logging.DEBUG)
 
     hc=logging.StreamHandler()
@@ -520,9 +552,10 @@ if __name__=='__main__':
     cwd=os.getcwd()
     logger.info("Going to archive %d runs" % len(runs))
 
-    # create archiver
-    #Archiver=S3Interface.client(logger)
-    Archiver=GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378")
+    # create archivers
+    #Archivers=[GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378"),]
+    #Archivers=[S3Interface.client(logger), ]
+    Archivers=[S3Interface.client(logger), GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378")]
 
     for run in runs:
         arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
@@ -534,6 +567,10 @@ if __name__=='__main__':
     t=time.time()-starttime
     bw=float(totalstats.bytes)/(1024.0**2)/t
 
+    # close and remove.  This is needed to allow rmtree to work...
+    o.dummy.close()
+    
     logger.debug("Removing staging dir %s" % o.staging)
     shutil.rmtree(o.staging)
-    logger.info("Archiving Finished %d Runs, %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.tarfiles, totalstats.files, totalstats.quips, float(totalstats.bytes)/1024**3, t, bw))
+    logger.info("Archiving Finished %d Runs, %d Errors, %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.errors, totalstats.tarfiles, totalstats.files, totalstats.quips, float(totalstats.bytes)/1024**3, t, bw))
+    sys.exit(1 if totalstats.errors else 0)
