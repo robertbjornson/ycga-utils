@@ -31,11 +31,12 @@ class client(object):
             return False
         return True
             
-    def moveFile(self, srcFile, destObj):
+    def moveFile(self, srcFile, destObj, extra={}):
         filesize=os.path.getsize(srcFile)
         self.logger.debug(f"submitting transfer {srcFile}, {destObj}, size {filesize}")
-        ret=self.s3_client.upload_file(Filename=srcFile, Bucket=self.bucket, Key=destObj) #, ExtraArgs = {'StorageClass':'INTELLIGENT_TIERING'})
-        if not ret:
+        try:
+            self.s3_client.upload_file(Filename=srcFile, Bucket=self.bucket, Key=destObj, ExtraArgs = extra)
+        except:
             self.logger.error("upload failed")
     
     # not used ?

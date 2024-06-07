@@ -34,7 +34,7 @@ class client(object):
         except TransferAPIError:
             return False
 
-    def moveFile(self, src_file, dest_file):
+    def moveFile(self, src_file, dest_file, extra={}):
         
         task_data = globus_sdk.TransferData(source_endpoint=self.local_collection_id, destination_endpoint=self.remote_collection_id, verify_checksum=True)
         filesize=os.path.getsize(src_file)

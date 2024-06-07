@@ -58,6 +58,9 @@ To do a single archive run:
 
 python archive.py [-n] -v -r /ycga-gpfs/sequencers/illumina/sequencerY/runs/161007_K00162_0117_AHFT32BBXX
 
+
+To decrypt, do: 
+gpg -d --batch --passphrase-file ~/.ssh/gpg.txt < sample.txt.gpg > sample.txt.decrypted
 '''
 
 import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil
@@ -193,7 +196,7 @@ class tarwrapper(object):
         logger.debug("Moving %s to %s" % (self.tmpfn, self.fn))
         ''' for all archivers '''
         for a in archivers:
-            a.moveFile(self.tmpfn, self.fn) 
+            a.moveFile(self.tmpfn, self.fn, extra={'StorageClass':'DEEP_ARCHIVE'}) 
 
     def validate(self, archivers):
         return True  ## FIX
@@ -553,9 +556,11 @@ if __name__=='__main__':
     logger.info("Going to archive %d runs" % len(runs))
 
     # create archivers
+    neseTape='23aa87a8-8c58-418d-8326-206962d9e895'
+    mccleary='ad28f8d7-33ba-4402-804e-3f454aeea842'
     #Archivers=[GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378"),]
     #Archivers=[S3Interface.client(logger), ]
-    Archivers=[S3Interface.client(logger), GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378")]
+    Archivers=[GlobusInterface.client(logger, mccleary, neseTape), S3Interface.client(logger)]
 
     for run in runs:
         arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
