@@ -63,9 +63,8 @@ To decrypt, do:
 gpg -d --batch --passphrase-file ~/.ssh/gpg.txt < sample.txt.gpg > sample.txt.decrypted
 '''
 
-import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil
+import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil, hashlib, functools
 
-import GlobusInterface
 import S3Interface
 
 # Directories matching these patterns, and everything below them, will not be archived
@@ -164,7 +163,6 @@ class tarwrapper(object):
         self.tfp=tarfile.open(self.tmpfn, 'w')
         #self.tfp=tarfile.open(fn, 'w')
         self.added=set() #files already added to archive
-        self.check=[] # validation task to run at the end
 
     ''' 
     name is the actual file holding the data (sometimes a temp file)
@@ -180,24 +178,18 @@ class tarwrapper(object):
             error("Attempting to overwrite %s in %s" % (arcname, self.fn))
         self.tfp.add(name, arcname)
         self.added.add(arcname)
-        self.check.append(validatejob(origname, arcname, o.testlen))
 
     def finalize(self, archivers):
         self.tfp.close()
         logger.debug("Closing %s" % self.tmpfn)
-        if o.encrypt:
-            cmd=f"gpg --batch --passphrase-file /home/rdb9/.ssh/gpg.txt --symmetric < {self.tmpfn} > {self.tmpfn}.enc"
-            logger.debug(f"encrypting: {cmd}")
-            ret=subprocess.run(cmd, shell=True)
-            if ret.returncode:
-                error("encryption failed")
-            self.tmpfn=f"{self.tmpfn}.enc"
-            self.fn=f'{self.fn}.enc'
         logger.debug("Moving %s to %s" % (self.tmpfn, self.fn))
         ''' for all archivers '''
         for a in archivers:
             a.moveFile(self.tmpfn, self.fn, extra={'StorageClass':'DEEP_ARCHIVE'}) 
-
+            # remove file
+            logger.debug(f"Removing {self.tmpfn}")
+            os.remove(self.tmpfn)
+            
     def validate(self, archivers):
         return True  ## FIX
         self.tfp.close()
@@ -263,7 +255,6 @@ def prunefiles(dirname, files):
 class stats(object):
     def __init__(self):
         self.bytes=0
-        self.quips=0
         self.files=0
         self.tarfiles=0
         self.runs=0
@@ -271,26 +262,10 @@ class stats(object):
         
     def comb(self, other):
         self.bytes+=other.bytes
-        self.quips+=other.quips
         self.files+=other.files
         self.tarfiles+=other.tarfiles
         self.runs+=other.runs
         self.errors+=other.errors
-
-''' encapsulates a validation task.  We may parallelize these similar to quipjobs in the future 
-Most files are validated by simply comparing the first portion of the file from both the archive and the original.
-quipped files are different: The quip file must be dequipped, and the original (usually gzipped) is uncompressed before comparing
-We usually only do the first 10000 bytes to save time.
-'''
-class validatejob(object):
-    def __init__(self, fn, tn, testlen=10000):
-        self.fn=fn #original name
-        self.tn=tn # archive name
-        self.testlen=testlen # number of bytes to compare
-        self.status=False
-
-    def __str__(self):
-        return "Validate Job "+self.fn
 
 '''
 This function is called to create the main tarball for a run, and also called recursively to archive each Unaligned/Project.
@@ -310,6 +285,12 @@ We will also create a log file and a finished file.  Thus:
   141215_M01156_0172_000000000-AAR3L_finished.txt
 
 '''
+
+def getSum(fn):
+    h=hashlib.new('sha256')
+    h.update(open(fn, 'rb').read())
+    return h.hexdigest()
+
 def makeTarball(top, arcdir, name, TodoArchivers, runstats):
 
     tfname="%s/%s.tar" % (arcdir, name % runstats.tarfiles)
@@ -344,7 +325,8 @@ def makeTarball(top, arcdir, name, TodoArchivers, runstats):
             fp=dirname+'/'+f
             try:
                 sz=os.stat(fp).st_size
-                logger.debug("adding %s (%d bytes)" % (fp, sz))
+                chksum=getSum(fp)
+                logger.debug(f"adding {fp} ({sz} bytes sha256 {chksum}")
                 runstats.files+=1; runstats.bytes+=sz
             except OSError:
                 pass # don't panic on broken links
@@ -428,11 +410,11 @@ def archiveRun(rundir, arcdir):
 
     t=time.time()-starttime
     bw=float(runstats.bytes)/(1024.0**2)/t
-    logger.info("All Done %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (runstats.tarfiles, runstats.files, runstats.quips, float(runstats.bytes)/1024**3, t, bw))
+    logger.info("All Done %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" % (runstats.tarfiles, runstats.files, float(runstats.bytes)/1024**3, t, bw))
     if not o.dryrun: 
         logger.removeHandler(h)
         for a in TodoArchivers:
-            a.moveFile(runLogFile, f'{arcdir}/{runLogFileBN}') 
+            a.moveFile(runLogFile, f'{arcdir}/{runLogFileBN}')
     return runstats
 
 '''
@@ -456,10 +438,8 @@ if __name__=='__main__':
     parser.add_argument("--automatic", dest="automatic", action="store_true", default=False, help="automatic settings")
     parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=False, help="don't actually do anything")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help="be verbose")
-    parser.add_argument("--novalidate", dest="validate", action="store_false", default=True, help="don't validate")
     parser.add_argument("-p", "--projecttars", dest="projecttars", action="store_true", default=True, help="put projects into separate tars")
     parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force to overwrite tar or finished files")
-    parser.add_argument("--noencrypt", dest="encrypt", action="store_false", default=True, help="encrypt tar files")
     parser.add_argument("-t", "--tmpdir", dest="tmpdir", default="/tmp", help="where to create tmp files")
     parser.add_argument("-i", "--infile", dest="infile", help="file containing runs to archive")
     parser.add_argument("-r", "--rundir", dest="rundir", help="run directory")
@@ -467,9 +447,6 @@ if __name__=='__main__':
     parser.add_argument("--cuton", dest="cuton", help="date cuton; a run earlier than this 6 digit date will not be archived.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
     parser.add_argument("-c", "--cutoff", dest="cutoff", help="date cutoff; a run later than this will no be archived.  Similar to --cuton")
     parser.add_argument("-l", "--logfile", dest="logfile", default="archive", help="logfile prefix")
-    parser.add_argument("--testlen", dest="testlen", type=int, default=10000, help="number of bytes to validate from each file")
-    parser.add_argument("--maxthds", dest="maxthds", type=int, default=20, help="max threads")
-    parser.add_argument("--maxsum", dest="maxsum", type=int, default=200, help="max memory to use (GBytes)")
     parser.add_argument("--staging", dest="staging", default=tempfile.mkdtemp(prefix='/home/rdb9/palmer_scratch/staging/'), help="staging prefix of dir for tars and log file")
 
     o=parser.parse_args()
@@ -529,7 +506,7 @@ if __name__=='__main__':
 
     elif o.automatic:
         rds=['/ycga-ba/ba_sequencers[12356]/sequencer?/runs/[0-9]*', '/ycga-gpfs/sequencers/illumina/sequencer*/runs/[0-9]*']
-        runs=sorted(reduce(lambda a,b: a+b, [glob.glob(rd) for rd in rds]))
+        runs=sorted(functools.reduce(lambda a,b: a+b, [glob.glob(rd) for rd in rds]))
 
     passedruns=[]
     for run in runs:
@@ -559,8 +536,9 @@ if __name__=='__main__':
     neseTape='23aa87a8-8c58-418d-8326-206962d9e895'
     mccleary='ad28f8d7-33ba-4402-804e-3f454aeea842'
     #Archivers=[GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378"),]
-    #Archivers=[S3Interface.client(logger), ]
-    Archivers=[GlobusInterface.client(logger, mccleary, neseTape), S3Interface.client(logger)]
+    Archivers=[S3Interface.client(logger, bucket='ycgatestbucket')]
+    #Archivers=[GlobusInterface.client(logger, mccleary, neseTape), S3Interface.client(logger)]
+    #Archivers=[GlobusInterface.client(logger, mccleary, neseTape), ]
 
     for run in runs:
         arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
@@ -577,5 +555,5 @@ if __name__=='__main__':
     
     logger.debug("Removing staging dir %s" % o.staging)
     shutil.rmtree(o.staging)
-    logger.info("Archiving Finished %d Runs, %d Errors, %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.errors, totalstats.tarfiles, totalstats.files, totalstats.quips, float(totalstats.bytes)/1024**3, t, bw))
+    logger.info("Archiving Finished %d Runs, %d Errors, %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.errors, totalstats.tarfiles, totalstats.files, float(totalstats.bytes)/1024**3, t, bw))
     sys.exit(1 if totalstats.errors else 0)
