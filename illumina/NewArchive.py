@@ -339,14 +339,25 @@ def makeTarball(top, arcdir, name, TodoArchivers, runstats):
     if not o.dryrun:
         tfp.finalize(TodoArchivers)
 
-    if not o.dryrun and o.validate:
-        tfp.validate(TodoArchivers)
-    
 '''
 rundir: path to run, starting with ?.  E.g. 
 arcdir: path to where tarballs should be created: 
 
+
+Status checking:
+ - using listdir, if:
+   - no files exist: go ahead and archive
+   - log file exists: complete archive exists
+   - some files exist, but no log file: error: partial archive exists
+
 '''
+
+def containsLogFile(lst):
+    for f in lst:
+        if f.endswith(".log"):
+            return True
+    return False
+
 def archiveRun(rundir, arcdir):
     runstats=stats()
 
@@ -355,17 +366,16 @@ def archiveRun(rundir, arcdir):
 
     ## arcdir=os.path.abspath(arcdir) ## not needed
     o.dummy=tempfile.NamedTemporaryFile(dir=o.staging)
-    o.started='%s/%s_started.txt' % (arcdir, o.runname)
-    o.finished='%s/%s_finished.txt' % (arcdir, o.runname) 
     
     if o.force:
         TodoArchivers=Archivers
     else:
         TodoArchivers=[]
         for a in Archivers:
-            if a.exists(o.finished):
+            filelist=a.listDir(arcdir)
+            if containsLogFile(filelist):
                 logger.debug("%s appears finished, skipping" % arcdir)
-            elif a.exists(o.started):
+            elif len(filelist)>0:
                 logger.error("Partial archive of %s exists" % arcdir)
                 runstats.errors+=1 
             else:
@@ -376,10 +386,6 @@ def archiveRun(rundir, arcdir):
         return runstats
     else:
         logger.debug(f'getting started {arcdir}.  Archivers {TodoArchivers}')  
-
-    if not o.dryrun:
-        for a in TodoArchivers:
-            a.moveFile(o.dummy.name, o.started)
 
     runstats.runs=1
     # set up log file for this run 
@@ -403,10 +409,6 @@ def archiveRun(rundir, arcdir):
     os.chdir(rundir); os.chdir('..')
 
     makeTarball(o.runname, arcdir, "%s_%%s" % o.runname, TodoArchivers, runstats)
-
-    if not o.dryrun:
-        for a in TodoArchivers:
-            a.moveFile(o.dummy.name,o.finished)
 
     t=time.time()-starttime
     bw=float(runstats.bytes)/(1024.0**2)/t
@@ -536,7 +538,7 @@ if __name__=='__main__':
     neseTape='23aa87a8-8c58-418d-8326-206962d9e895'
     mccleary='ad28f8d7-33ba-4402-804e-3f454aeea842'
     #Archivers=[GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378"),]
-    Archivers=[S3Interface.client(logger, bucket='ycgatestbucket')]
+    Archivers=[S3Interface.client(logger, bucket='ycgasequencearchive')]
     #Archivers=[GlobusInterface.client(logger, mccleary, neseTape), S3Interface.client(logger)]
     #Archivers=[GlobusInterface.client(logger, mccleary, neseTape), ]
 
