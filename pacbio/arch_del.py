@@ -95,7 +95,7 @@ if __name__=='__main__':
 
         tarFName=os.path.join(archdir, d)+".tar"
         finishFName=os.path.join(archdir, d)+".finished"
-        deletedFName=os.path.join(o.dir, d)+".deleted"
+        deletedFName=os.path.join(o.dir, newdir, d)+".deleted"
 
         if deltaT > o.archPeriod * secPerDay:
             if not os.path.isdir(archdir):
@@ -113,9 +113,9 @@ if __name__=='__main__':
                     logger.info (f"archiving {src} to {tarFName}")
                     counter["archived"]+=1
                     if o.fastqs:
-                        cmd="(find %(src)s -name \"*.fastq.gz\" | tar cf %(tarFName)s --files-from=- && touch \"%(finishFName)s\")" % locals()
+                        cmd="(find %(src)s -name \"*.fastq.gz\" | tar cvf %(tarFName)s --files-from=- && touch \"%(finishFName)s\")" % locals()
                     else:
-                        cmd="(tar -cf \"%(tarFName)s\" \"%(src)s\" && touch \"%(finishFName)s\")" % locals()
+                        cmd="(tar -cvf \"%(tarFName)s\" \"%(src)s\" && touch \"%(finishFName)s\")" % locals()
                     if o.dryrun:
                         logger.debug(cmd)
                     else:
@@ -130,6 +130,7 @@ if __name__=='__main__':
                     counter["deleted"]+=1
                     cmd="rm -rf \"%s\"" % (src,)            
                     msg=deleteTmplt % {'date':(time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())), 'location':tarFName}
+                    logger.debug(f"creating {deletedFName}")
                     if o.dryrun:
                         logger.info(cmd)
                     else:
@@ -138,6 +139,10 @@ if __name__=='__main__':
                 else:
                     logger.error ("not deleting %s, %s not found" % (src, finishFName))
             else:
-                logger.info ("not deleting %s, too new" % src)
+                logger.debug ("not deleting %s, too new" % src)
 
     summarize(counter)
+
+'''
+    tar -cvpf xxx.tar xxx/ | xargs -I '{}' sh -c "test -f '{}' && sha256sum '{}'" | tee xxx.md5
+'''
