@@ -294,13 +294,12 @@ def getSum(fn):
 def makeTarball(top, arcdir, name, TodoArchivers, runstats):
 
     tfname="%s/%s.tar" % (arcdir, name % runstats.tarfiles)
-    if not o.force:
-        ''' this shouldn't really happen, start + finish testing should handle this '''
-        for a in TodoArchivers:
-            if a.exists(tfname):
-                logger.error(f"Archiver {a} found existing {tfname}")
-                runstats.errors+=1
-                return runstats
+    ''' this shouldn't really happen, start + finish testing should handle this '''
+    for a in TodoArchivers:
+        if a.exists(tfname):
+            logger.error(f"Archiver {a} found existing {tfname}")
+            runstats.errors+=1
+            return runstats
             
     logger.debug("creating tarfile %s" % tfname) 
     if o.dryrun:
@@ -358,7 +357,24 @@ def containsLogFile(lst):
             return True
     return False
 
-def archiveRun(rundir, arcdir):
+def archiveOK(arcdir, Archivers):
+    todo=[]
+    for a in Archivers:
+        # remove .deleted or .DELETED if present
+        if arcdir.endswith('.deleted') or arcdir.endswith('.DELETED'):
+            arcdir=arcdir[:-8]
+        filelist=a.listDir(arcdir)
+        if containsLogFile(filelist):
+            continue
+        elif len(filelist)>0:
+            logger.error(f"Partial archive of {arcdir} exists")
+            sys.exit()
+        else:
+            logger.debug(f"{a} missing archive {arcdir}, considering for archive" )
+            todo.append(a)
+    return todo
+        
+def archiveRun(rundir, arcdir, TodoArchivers):
     runstats=stats()
 
     o.runname=os.path.basename(rundir)
@@ -367,20 +383,6 @@ def archiveRun(rundir, arcdir):
     ## arcdir=os.path.abspath(arcdir) ## not needed
     o.dummy=tempfile.NamedTemporaryFile(dir=o.staging)
     
-    if o.force:
-        TodoArchivers=Archivers
-    else:
-        TodoArchivers=[]
-        for a in Archivers:
-            filelist=a.listDir(arcdir)
-            if containsLogFile(filelist):
-                logger.debug("%s appears finished, skipping" % arcdir)
-            elif len(filelist)>0:
-                logger.error("Partial archive of %s exists" % arcdir)
-                runstats.errors+=1 
-            else:
-                TodoArchivers.append(a)
-
     if not TodoArchivers:
         logger.debug('nothing to do for this run')
         return runstats
@@ -408,15 +410,19 @@ def archiveRun(rundir, arcdir):
     # cd to dir above rundir
     os.chdir(rundir); os.chdir('..')
 
-    makeTarball(o.runname, arcdir, "%s_%%s" % o.runname, TodoArchivers, runstats)
-
+    if o.dryrun:
+        logger.debug("pretending to make tarball")
+    else:
+        makeTarball(o.runname, arcdir, "%s_%%s" % o.runname, TodoArchivers, runstats)
+    
     t=time.time()-starttime
     bw=float(runstats.bytes)/(1024.0**2)/t
-    logger.info("All Done %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" % (runstats.tarfiles, runstats.files, float(runstats.bytes)/1024**3, t, bw))
+
     if not o.dryrun: 
         logger.removeHandler(h)
         for a in TodoArchivers:
             a.moveFile(runLogFile, f'{arcdir}/{runLogFileBN}')
+    logger.info("All Done %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" % (runstats.tarfiles, runstats.files, float(runstats.bytes)/1024**3, t, bw))
     return runstats
 
 '''
@@ -441,15 +447,16 @@ if __name__=='__main__':
     parser.add_argument("-n", "--dryrun", dest="dryrun", action="store_true", default=False, help="don't actually do anything")
     parser.add_argument("-v", "--verbose", dest="verbose", action="store_true", default=False, help="be verbose")
     parser.add_argument("-p", "--projecttars", dest="projecttars", action="store_true", default=True, help="put projects into separate tars")
-    parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force to overwrite tar or finished files")
     parser.add_argument("-t", "--tmpdir", dest="tmpdir", default="/tmp", help="where to create tmp files")
     parser.add_argument("-i", "--infile", dest="infile", help="file containing runs to archive")
     parser.add_argument("-r", "--rundir", dest="rundir", help="run directory")
-    parser.add_argument("-a", "--arcdir", dest="arcdir", default="archive", help="archive directory") 
+    parser.add_argument("-a", "--arcdir", dest="arcdir", default="archive", help="archive directory")
     parser.add_argument("--cuton", dest="cuton", help="date cuton; a run earlier than this 6 digit date will not be archived.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
-    parser.add_argument("-c", "--cutoff", dest="cutoff", help="date cutoff; a run later than this will no be archived.  Similar to --cuton")
-    parser.add_argument("-l", "--logfile", dest="logfile", default="archive", help="logfile prefix")
+
+    parser.add_argument("-c", "--cutoff", dest="cutoff", help="date cutoff; a run later than this 6 digit date will not be archived.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
+    parser.add_argument("-l", "--logfile", dest="logfile", default="rdb9archive", help="logfile prefix")
     parser.add_argument("--staging", dest="staging", default=tempfile.mkdtemp(prefix='/home/rdb9/palmer_scratch/staging/'), help="staging prefix of dir for tars and log file")
+    parser.add_argument("--maxruns", dest="maxruns", default=0, type=int, help="Only archive this many runs (for testing purposes)")
 
     o=parser.parse_args()
 
@@ -469,7 +476,7 @@ if __name__=='__main__':
     hf.setFormatter(formatter)
     if not o.verbose: hf.setLevel(logging.DEBUG)
     logger.addHandler(hf)
-
+                        
     # do some validation
     # require exactly one of -r, --automatic, -i
     if countTrue(o.rundir, o.automatic, o.infile) != 1:
@@ -480,15 +487,12 @@ if __name__=='__main__':
         if not o.cutoff: o.cutoff=-60
 
     if o.cuton: o.cuton=fixCut(o.cuton)
-    if o.cuton: o.cutoff=fixCut(o.cutoff)
-
-    if o.cuton and o.cutoff and o.cutoff < o.cuton:
-        error("--cuton must be less than --cutoff")
+    if o.cutoff: o.cutoff=fixCut(o.cutoff)
 
     logger.debug("Invocation: " + " ".join(sys.argv))
     logger.debug("Cwd: " + os.getcwd())
     logger.debug("Options:" + str(o))
-
+                        
     totalstats=stats()
     runs=[]
 
@@ -509,42 +513,68 @@ if __name__=='__main__':
     elif o.automatic:
         rds=['/ycga-ba/ba_sequencers[12356]/sequencer?/runs/[0-9]*', '/ycga-gpfs/sequencers/illumina/sequencer*/runs/[0-9]*']
         runs=sorted(functools.reduce(lambda a,b: a+b, [glob.glob(rd) for rd in rds]))
-
-    passedruns=[]
-    for run in runs:
-        # original deleted run (just a file)
-        if run.endswith(".DELETED"):
-            logger.debug("Skipping %s: deleted", run) 
-            continue
-        # new style deleted run (reduced tree)
-        if run.endswith(".deleted"):
-            logger.debug("Skipping %s: deleted", run) 
-            continue
-        rundate=getRundate(os.path.basename(run))
-        if o.cuton and rundate < o.cuton:
-            logger.debug("Skipping %s: earlier than cuton" % run)
-            continue
-        if o.cutoff and rundate > o.cutoff:
-            logger.debug("Skipping %s: later than cutoff" % run)
-            continue
-        passedruns.append(run)
-    runs=passedruns
-
-    # ok, here we go
-    cwd=os.getcwd()
-    logger.info("Going to archive %d runs" % len(runs))
-
+        logger.info("WARNING: skipping sequencer F")
+        runs=[r for r in runs if r.find("sequencerF") == -1] # filter out all sequencerF runs 
+        
+    '''
+    Go through all runs.  Each should be in one of these states:
+    - Deleted.  Must also be archived.  Check for archive
+    - Not deleted but archived.  Check for archive
+    - Not archived, older than cutoff.  Schedule for archiving
+    - Not archived, newer than cutoff.  Skip.
+    '''
+    
     # create archivers
-    neseTape='23aa87a8-8c58-418d-8326-206962d9e895'
-    mccleary='ad28f8d7-33ba-4402-804e-3f454aeea842'
+    #neseTape='23aa87a8-8c58-418d-8326-206962d9e895'
+    #mccleary='ad28f8d7-33ba-4402-804e-3f454aeea842'
     #Archivers=[GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378"),]
-    Archivers=[S3Interface.client(logger, bucket='ycgasequencearchive')]
+    Archivers=[S3Interface.client(logger, bucket='ycgasequencearchive', credentials='/home/rdb9/.aws/credentials', profile='default')]
     #Archivers=[GlobusInterface.client(logger, mccleary, neseTape), S3Interface.client(logger)]
     #Archivers=[GlobusInterface.client(logger, mccleary, neseTape), ]
 
+    todoruns=[]
+    
     for run in runs:
         arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
-        runstats=archiveRun(run, arcdir) # do the archiving
+        '''
+        DELETED: original deleted run (just a file)
+        deleted: new style deleted run (reduced tree)
+        archiveOK returns a list of Archivers needing an archive.  Empty list means all set
+        '''
+
+        rundate=getRundate(os.path.basename(run))
+        if o.cutoff and rundate > o.cutoff:
+            logger.debug(f"Skipping {run}: later than cutoff")
+            continue
+                
+        if o.cuton and rundate < o.cuton:
+            logger.debug(f"Skipping {run}: earlier than cuton")
+            continue
+
+        # see what needs to be archived, return needed archivers.  Fail if partial archive found.
+        archivers=archiveOK(arcdir, Archivers)
+        
+        if run.endswith(".DELETED") or run.endswith(".deleted"):
+            if archivers:
+                logger.error(f"Missing archive for {run}")
+            logger.debug("Skipping %s: deleted, archive OK", run) 
+            continue
+        
+        if not archivers:
+            logger.debug(f"Skipping {run}: archive OK")
+            continue
+        
+        logger.debug(f"Plan to archive {run}")
+        todoruns.append((run, archivers))
+
+    # ok, here we go
+    cwd=os.getcwd()
+    if o.maxruns: todoruns=todoruns[:o.maxruns]
+    logger.info("Going to archive %d runs" % len(todoruns))
+
+    for run, archivers in todoruns:
+        arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
+        runstats=archiveRun(run, arcdir, archivers) # do the archiving
         totalstats.comb(runstats)
         
         os.chdir(cwd) # archiveRun changed our dir, change it back now
