@@ -64,6 +64,7 @@ gpg -d --batch --passphrase-file ~/.ssh/gpg.txt < sample.txt.gpg > sample.txt.de
 '''
 
 import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil, hashlib, functools
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import S3Interface
 
@@ -373,7 +374,11 @@ def archiveOK(arcdir, Archivers):
             logger.debug(f"{a} missing archive {arcdir}, considering for archive" )
             todo.append(a)
     return todo
-        
+
+def archiveRunWrapper(rundir, arcdir):
+    Archivers=[S3Interface.client(logger, bucket='ycgatestbucket', credentials='/home/rdb9/.aws/credentials', profile='default'),]
+    return archiveRun(rundir, arcdir, Archivers)
+    
 def archiveRun(rundir, arcdir, TodoArchivers):
     runstats=stats()
 
@@ -422,7 +427,7 @@ def archiveRun(rundir, arcdir, TodoArchivers):
         logger.removeHandler(h)
         for a in TodoArchivers:
             a.moveFile(runLogFile, f'{arcdir}/{runLogFileBN}')
-    logger.info("All Done %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" % (runstats.tarfiles, runstats.files, float(runstats.bytes)/1024**3, t, bw))
+    logger.info("All Done %s: %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" % (rundir, runstats.tarfiles, runstats.files, float(runstats.bytes)/1024**3, t, bw))
     return runstats
 
 '''
@@ -452,11 +457,11 @@ if __name__=='__main__':
     parser.add_argument("-r", "--rundir", dest="rundir", help="run directory")
     parser.add_argument("-a", "--arcdir", dest="arcdir", default="archive", help="archive directory")
     parser.add_argument("--cuton", dest="cuton", help="date cuton; a run earlier than this 6 digit date will not be archived.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
-
     parser.add_argument("-c", "--cutoff", dest="cutoff", help="date cutoff; a run later than this 6 digit date will not be archived.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
     parser.add_argument("-l", "--logfile", dest="logfile", default="rdb9archive", help="logfile prefix")
     parser.add_argument("--staging", dest="staging", default=tempfile.mkdtemp(prefix='/home/rdb9/palmer_scratch/staging/'), help="staging prefix of dir for tars and log file")
     parser.add_argument("--maxruns", dest="maxruns", default=0, type=int, help="Only archive this many runs (for testing purposes)")
+    parser.add_argument("-w", "--workers", dest="workers", default=1, type=int, help="num workers for parallelism")
 
     o=parser.parse_args()
 
@@ -464,7 +469,7 @@ if __name__=='__main__':
 
     # set up logging
     logger=logging.getLogger('archive')
-    formatter=logging.Formatter("%(asctime)s %(filename)s %(lineno)d %(levelname)s %(message)s")
+    formatter=logging.Formatter("%(asctime)s %(process)s %(filename)s %(lineno)d %(levelname)s %(message)s")
     logger.setLevel(logging.DEBUG)
 
     hc=logging.StreamHandler()
@@ -514,24 +519,14 @@ if __name__=='__main__':
         rds=['/ycga-ba/ba_sequencers[12356]/sequencer?/runs/[0-9]*', '/ycga-gpfs/sequencers/illumina/sequencer*/runs/[0-9]*']
         runs=sorted(functools.reduce(lambda a,b: a+b, [glob.glob(rd) for rd in rds]))
         logger.info("WARNING: skipping sequencer F")
-        runs=[r for r in runs if r.find("sequencerF") == -1] # filter out all sequencerF runs 
-        
-    '''
-    Go through all runs.  Each should be in one of these states:
-    - Deleted.  Must also be archived.  Check for archive
-    - Not deleted but archived.  Check for archive
-    - Not archived, older than cutoff.  Schedule for archiving
-    - Not archived, newer than cutoff.  Skip.
-    '''
-    
-    # create archivers
-    #neseTape='23aa87a8-8c58-418d-8326-206962d9e895'
-    #mccleary='ad28f8d7-33ba-4402-804e-3f454aeea842'
-    #Archivers=[GlobusInterface.client(logger, "ad28f8d7-33ba-4402-804e-3f454aeea842", "924c6f20-aa6f-41ef-bfdf-ada650163378"),]
-    Archivers=[S3Interface.client(logger, bucket='ycgasequencearchive', credentials='/home/rdb9/.aws/credentials', profile='default')]
-    #Archivers=[GlobusInterface.client(logger, mccleary, neseTape), S3Interface.client(logger)]
-    #Archivers=[GlobusInterface.client(logger, mccleary, neseTape), ]
+        runs=[r for r in runs if r.find("sequencerF") == -1] # filter out all sequencerF runs
 
+    # set up parallel workers
+    if o.workers < 1 or o.workers > 64:
+        logger.error("Illegal number for workers")
+        sys.exit(1)
+
+    Archivers=[S3Interface.client(logger, bucket='ycgatestbucket', credentials='/home/rdb9/.aws/credentials', profile='default'),]
     todoruns=[]
     
     for run in runs:
@@ -565,27 +560,36 @@ if __name__=='__main__':
             continue
         
         logger.debug(f"Plan to archive {run}")
-        todoruns.append((run, archivers))
+        todoruns.append(run)
+        
+    executor = ProcessPoolExecutor(max_workers=o.workers)
+    futures=[]
+    
+    for run in todoruns:
+        arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
+        future=executor.submit(archiveRunWrapper, run, arcdir) # do the archiving
+        futures.append(future)
 
-    # ok, here we go
-    cwd=os.getcwd()
-    if o.maxruns: todoruns=todoruns[:o.maxruns]
-    logger.info("Going to archive %d runs" % len(todoruns))
-
-    for run, archivers in todoruns:
+    for future in as_completed(futures):
+        runstats=future.result()
+        totalstats.comb(runstats)
+        
+    '''
+    for run, archivers in runs:
         arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
         runstats=archiveRun(run, arcdir, archivers) # do the archiving
         totalstats.comb(runstats)
         
         os.chdir(cwd) # archiveRun changed our dir, change it back now
-
+    '''
+    
     t=time.time()-starttime
     bw=float(totalstats.bytes)/(1024.0**2)/t
 
     # close and remove.  This is needed to allow rmtree to work...
-    o.dummy.close()
+    #o.dummy.close()
     
     logger.debug("Removing staging dir %s" % o.staging)
-    shutil.rmtree(o.staging)
+    shutil.rmtree(o.staging, ignore_errors=True)
     logger.info("Archiving Finished %d Runs, %d Errors, %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.errors, totalstats.tarfiles, totalstats.files, float(totalstats.bytes)/1024**3, t, bw))
     sys.exit(1 if totalstats.errors else 0)
