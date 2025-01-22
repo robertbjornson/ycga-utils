@@ -52,7 +52,7 @@ def doRm(e):
         if os.path.isfile(t):
             os.remove(t)
         elif os.path.isdir(t):
-            os.rmtree(t)
+            shutil.rmtree(t)
 
 def cleanRun(r):
     logger.info(f'Cleaning {r}')
@@ -75,6 +75,7 @@ if __name__=='__main__':
     parser.add_argument("--cutoff", dest="cutoff", default="-45", help="date cutoff; a run later than this 6 digit date will not be cleaned.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
     parser.add_argument("-l", "--logfile", dest="logfile", default="clean", help="logfile prefix")
     parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force clean")
+    parser.add_argument("--maxruns", dest="maxruns", default=0, type=int, help="Only clean this many runs (for testing purposes)")
 
     o=parser.parse_args()
 
@@ -160,6 +161,11 @@ if __name__=='__main__':
 
     logger.info("Found %d runs to clean" % len(cleanjobs))
 
+    if o.maxruns > 0:
+        cleanjobs=cleanjobs[:o.maxruns]
+        
     for r in cleanjobs:
         cleanRun(r)
 
+
+    logger.info("All Done")
