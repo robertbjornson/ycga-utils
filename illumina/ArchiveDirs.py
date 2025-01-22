@@ -103,7 +103,11 @@ time openssl aes-256-cbc -d -pbkdf2 -kfile ~/.ssh/ssl.key -in run4.tar.enc -out 
 import argparse, os, datetime, time, logging, subprocess, sys, string, tempfile
 import S3Interface, GlobusInterface
 import multiprocessing
-from CompressAndTar import compressAndTar
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+#from CompressAndTar import compressAndTar
+
+from Stats import stats
 
 secPerDay=3600*24
 
@@ -147,7 +151,6 @@ def summarize(counter):
 def do(cmd):
     logger.debug(f"running cmd: {cmd}")
     ret=subprocess.run(cmd, shell=True)
-    print(ret)
     if ret.returncode:
         error("cmd failed")
 
@@ -156,12 +159,16 @@ def archiveDS(tarBaseName, d):
     # the new file will be archdir/rootdir.../newdir/d
     # o.staging is where we create the various files before transferring them.
 
+    starttime=time.time()
+    runstats=stats()
     bn=os.path.basename(d)
     # local files and dirs
-    tmpTarFile=f'{o.staging}/{bn}.tar'
+    #tmpTarFile=f'{o.staging}/{bn}.tar'
+    tmpTarFile=tempfile.NamedTemporaryFile(dir=o.staging, suffix=f'_{bn}.tar').name
     #logfileBN=f'{time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())}_{d}_archive.log'
-    logfileBN=f'{bn}.log'
-    locallogfile=f'{o.staging}/{logfileBN}'
+    #logfileBN=f'{bn}.log'
+    locallogfile=tempfile.NamedTemporaryFile(dir=o.staging, suffix=f'_{bn}.log').name
+    #locallogfile=f'{o.staging}/{logfileBN}'
 
     # src is the dir we will tar up.
     src=d
@@ -171,7 +178,7 @@ def archiveDS(tarBaseName, d):
     deltaT=time.time()-ts
     if deltaT < o.archPeriod * secPerDay:
         logger.info(f"{src} too young to archive")
-        return
+        return runstats
 
     remoteTarFile=f'{tarBaseName}.tar'
     remotelogfile=f'{tarBaseName}.log'
@@ -188,20 +195,21 @@ def archiveDS(tarBaseName, d):
             if a.exists(remotelogfile):
                 logger.debug(f"{d} appears finished, skipping")
             elif a.exists(remoteTarFile):
-                error(f"Partial archive of {d} exists")
-                #runstats.errors+=1 
+                logger.error(f"Partial archive of {d} exists")
+                runstats.errors+=1 
             else:
                 TodoArchivers.append(a)
 
         if not TodoArchivers:
             logger.info(f'Not archiving {src}, already done.')
-            return 0
+            return runstats
         else:
             logger.debug(f'getting started {d}.  Archivers {TodoArchivers}')  
 
 
     logger.info(f'Archiving {src} to {o.bucket}:{remoteTarFile}')
-
+    runstats.runs+=1
+    
     if o.fastqs:
         cmd=f"find {src} -name \"*.fastq.gz\" | tar cvf {tmpTarFile} --files-from=- > {locallogfile}" 
     else:
@@ -226,15 +234,26 @@ def archiveDS(tarBaseName, d):
     for a in Archivers:
         logger.debug(f"moving {tmpTarFile} ->  {remoteTarFile}")
         logger.debug(f"moving {locallogfile} -> {remotelogfile}")
+        runstats.files+=2
+        runstats.tarfiles=+1
         if not o.dryrun:
-            a.moveFile(tmpTarFile, remoteTarFile, extra={}) # extra={'StorageClass':'DEEP_ARCHIVE'})
+            runstats.bytes+=os.path.getsize(tmpTarFile)
+            a.moveFile(tmpTarFile, remoteTarFile, extra={'StorageClass':'DEEP_ARCHIVE'})
             a.moveFile(locallogfile, remotelogfile) 
     # do some cleanup here
     if not o.dryrun and not o.noclean:
         os.remove(tmpTarFile)
         os.remove(locallogfile)
 
+    t=time.time()-starttime
+    bw=float(runstats.bytes)/(1024.0**2)/t
+
+    logger.info("All Done %s: %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" % (d, runstats.tarfiles, runstats.files, float(runstats.bytes)/1024**3, t, bw))
+    return runstats
+
 def deleteDS(tarBaseName, d):
+
+    runstats=stats()
     Archivers=createArchivers()
 
     # check date on src dir to see if ready to delete
@@ -242,7 +261,7 @@ def deleteDS(tarBaseName, d):
     deltaT=time.time()-ts
     if deltaT < o.delPeriod * secPerDay:
         logger.info(f"{d} too young to delete")
-        return
+        return runstats
 
     remoteTarFile=f'{tarBaseName}.tar'
     remoteLogFile=f'{tarBaseName}.log'
@@ -253,15 +272,17 @@ def deleteDS(tarBaseName, d):
         logger.debug(f"logOK {logOK}, tarOK {tarOK}")
         if not (logOK and tarOK):
             logger.error(f"expected archive {remoteTarFile} invalid, not deleting dataset")
-            return
+            runstats.errors+=1
 
     cmd=f"rm -rf {d}"
     msg=deleteTmplt % {'date':(time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())), 'bucket':o.bucket, 'location':remoteTarFile}
     logger.info(f"Deleting {d}")
+    runstats.deletes+=1
     if not (o.dryrun or o.nodel):
         runCmd(cmd)
         deletedFName=f"{d}.deleted"
         open(deletedFName, "w").write(msg)
+    return runstats
 
 def createArchivers():
     global Archivers
@@ -288,7 +309,11 @@ def createArchivers():
 def genTarBaseName(fsd):
     tmp=trim_leading_dirs(fsd, o.trimdirs)
     return(os.path.join(o.archDir, tmp))
-           
+
+def archiveRunWrapper(tbn, d):
+    Archivers=[S3Interface.client(logger, bucket=o.bucket, credentials='/home/rdb9/.aws/credentials', profile='default'),]
+    return archiveDS(tbn, d)
+
 if __name__=='__main__':
     parser=argparse.ArgumentParser(epilog=info, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--searchdir", dest="searchdir", help="archive all directories found in this directory")
@@ -308,11 +333,10 @@ if __name__=='__main__':
     parser.add_argument("--nodescend", dest="descend", action="store_false", default=True, help="10x run dirs can have netid super-directories.  Descend one level")
     parser.add_argument("--encrypt", dest="encrypt", action="store_true", default=False, help="encrypt files")
     parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force to overwrite tar or finished files")
-    parser.add_argument("--trimdirs", dest="trimdirs", type=int, default=0, help="number of leading dirs to trim from root when naming tarball")
+    parser.add_argument("--trimdirs", dest="trimdirs", type=int, required=True, help="number of leading dirs to trim from root when naming tarball")
     # current trims: 10x: 4, pacbio: 2 
-    parser.add_argument("--workers", dest="workers", type=int, default=1, help="number of workers in pool")
-    parser.add_argument("--threads", dest="threads", type=int, default=4, help="number of threads for Spring")
     parser.add_argument("--maxruns", dest="maxruns", default=0, type=int, help="Only archive this many runs (for testing purposes)")
+    parser.add_argument("-w", "--workers", dest="workers", default=1, type=int, help="num workers for parallelism")
     parser.add_argument("--bucket", dest="bucket", default="ycgasequencearchive", help="bucket to archive to")
     #parser.add_argument("--filterdirs", dest="filterdirs", default=None, help="Only archive source dirs that match the filter")
         
@@ -324,15 +348,19 @@ if __name__=='__main__':
     formatter=logging.Formatter("%(asctime)s %(filename)s:%(lineno)s %(process)s %(levelname)s %(message)s")
     logger.setLevel(logging.DEBUG)
 
-    logfname=f'{o.staging}/{time.strftime("%Y_%m_%d_%H_%M_%S", time.gmtime())}_{o.logfile}'
-    h=logging.FileHandler(logfname)
-    h.setLevel(logging.DEBUG)
-    h.setFormatter(formatter)
-    logger.addHandler(h)
+    logfname=f'{o.logfile}_{time.strftime("%Y_%m_%d_%H_%M_%S", time.gmtime())}.log'
+    hl=logging.FileHandler(logfname)
+    hl.setLevel(logging.DEBUG)
+    hl.setFormatter(formatter)
+    logger.addHandler(hl)
 
     hc=logging.StreamHandler()
     hc.setFormatter(formatter)
-    if not o.verbose: hc.setLevel(logging.INFO)
+    if o.verbose:
+        hc.setLevel(logging.DEBUG)
+    else:
+        hc.setLevel(logging.INFO)
+        
     logger.addHandler(hc)
 
     logger.info(o)
@@ -353,6 +381,7 @@ if __name__=='__main__':
     counter={"deleted":0, "archived":0, "partial":0}
     now=time.time()
     targets=[]
+    totalstats=stats()
 
     """ collect all targets to be examined into a list.  Targets are the actual directories that will become
     tarballs.  If descend is set, descend one level to the actual targets.  Targets contains just the dir or a dir/subdir
@@ -362,6 +391,7 @@ if __name__=='__main__':
         for d in sorted(os.listdir(o.searchdir)):
             fd=os.path.join(o.searchdir, d)
             if not os.path.isdir(fd): continue
+            if fd.endswith(".NOARCHIVE"): continue
             if o.descend:
                 for sd in sorted(os.listdir(fd)):
                     fsd=os.path.join(fd, sd)
@@ -389,7 +419,15 @@ if __name__=='__main__':
     tmpArchivers=createArchivers()
     # First archive whatever needs archiving, depending on date and archive status
     # consider parallelizing here
+
+    starttime=time.time()
+
     logger.info("Archive Phase")
+
+    # set up parallel workers
+    if o.workers > 1:
+        executor = ProcessPoolExecutor(max_workers=o.workers)
+        futures=[]
 
     '''
     if o.filterdirs:
@@ -399,17 +437,35 @@ if __name__=='__main__':
     
     if o.maxruns:
         targets=targets[:o.maxruns]
-        
+
     if not o.noarch:
-        for t in targets:
-            archiveDS(*t)
-    #pool.starmap(archiveDS, targets)
+        if o.workers==1:
+            for t in targets:
+                tbn, d = t
+                runstats=archiveRunWrapper(tbn, d)
+                totalstats.comb(runstats)
+        else:
+            for t in targets:
+                tbn, d = t
+                future=executor.submit(archiveRunWrapper, tbn, d)
+                futures.append(future)
+            
+            for future in as_completed(futures):
+                runstats=future.result()
+                totalstats.comb(runstats)
     
     # Next delete anything that is old enough to be deleted, and for which valid archives exist in all Archivers.
 
     logger.info("Delete Phase")
     if not o.nodel:
         for t in targets:
-            ok=deleteDS(*t)
-    
-    
+            runstats=deleteDS(*t)
+            totalstats.comb(runstats)
+
+    t=time.time()-starttime
+    bw=float(totalstats.bytes)/(1024.0**2)/t
+
+    logger.info("Archiving Finished %d Runs, %d Errors, %d Tarfiles, %d Files, %f GB, %f Sec, %f MB/sec" %
+                (totalstats.runs, totalstats.errors, totalstats.tarfiles, totalstats.files, float(totalstats.bytes)/1024**3, t, bw))
+    logger.info(f"Delete Finished {totalstats.deletes} Deletes")
+

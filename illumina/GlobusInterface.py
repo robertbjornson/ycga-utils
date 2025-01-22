@@ -49,18 +49,20 @@ class client(object):
         task_doc = self.tc.submit_transfer(task_data)
         task_id = task_doc["task_id"]
 
-        prevsize=0; size=0
+        prevsize=0; size=0; pct=0
         self.logger.debug(f"waiting on {task_id}")
         while not self.tc.task_wait(task_id, timeout=60):
             try:
-                stat=self.tc.operation_stat(dest_collection_id, f"/{dest_file}")
+                stat=self.tc.operation_stat(self.remote_collection_id, f"/{dest_file}")
                 size=stat["size"]
+                pct=100*size/filesize
+                
             except:
-                self.logger.debug("huh")
-            self.logger.debug(f"waiting on {task_id}: current size {size}")
+                self.logger.debug("stat failed")
+            self.logger.debug(f"waiting on {task_id}: current size {size} {pct:.2f}%")
             self.logger.debug
             if not size>prevsize:
-                self.logger.error(f"{dest_file} not growing!")
+                self.logger.warning(f"{dest_file} not growing!")
 
         self.logger.debug("Finished")
         
@@ -94,8 +96,12 @@ class client(object):
 mcc_collection_id="fa56d2d4-adfd-4f1e-b735-5f28bde144d7"
 src_collection_id = "64b7e306-edb7-4b17-8b25-9033517eca8b" #ESNET
 dest_collection_id = "924c6f20-aa6f-41ef-bfdf-ada650163378" # TESTTARGET
-filenames=['/1M.dat', '/10M.dat', '/100M.dat']
-destdir='/Testing'
+
+destdir='archive'
+
+srcFiles=['/home/rdb9/palmer_scratch/staging/BIGFILE1M',]
+neseTape='23aa87a8-8c58-418d-8326-206962d9e895'
+
 
 if __name__=='__main__':
 
@@ -106,9 +112,9 @@ if __name__=='__main__':
     hc.setFormatter(formatter)
     logger.addHandler(hc)
 
-    c=client(logger, src_collection_id, dest_collection_id)
+    c=client(logger, mcc_collection_id, neseTape)
 
-    newfiles=[f'{destdir}{fn}.{random.randint(1,10000)}' for fn in filenames]
+    newfiles=[f'{destdir}{fn}.{random.randint(1,10000)}' for fn in srcFiles]
 
     ret=c.exists(destdir)
     if ret:
@@ -118,8 +124,8 @@ if __name__=='__main__':
         c.mkDir(destdir)
                      
     logger.debug("testing transfer")
-    for sf, df in zip(filenames, newfiles):
-        c.moveFile(filenames, newfiles)
+    for sf, df in zip(srcFiles, newfiles):
+        c.moveFile(sf, df)
 
     logger.debug("testing exists")
     for nf in newfiles:
