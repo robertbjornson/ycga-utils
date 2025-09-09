@@ -47,7 +47,7 @@ def findFiles(top, pat):
 ''' Example 
 Undetermined_S0_L003_R2_001.fastq.gz
 '''
-undet_pat=re.compile('.*Undetermined_.*\d\d\d.fastq.gz$')
+undet_pat=re.compile(r'.*Undetermined_.*\d\d\d.fastq.gz$')
 
 def cleanRun(rundir):
     s=stats(os.path.basename(rundir))
@@ -255,7 +255,7 @@ earlier machines used 6.
 '''
 
 def getRundate(run):
-    mo=re.match('^(\d+)_',run)
+    mo=re.match(r'^(\d+)_',run)
     if not mo:
         error('bad rundate')
     datestr=mo.group(1)    

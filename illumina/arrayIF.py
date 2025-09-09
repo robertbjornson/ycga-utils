@@ -2,6 +2,7 @@
 import tempfile, subprocess, logging
 
 tmplt='''#!/bin/bash
+#SBATCH -p %(partition)s
 #SBATCH --array %(range)s
 #SBATCH --job-name %(name)s
 #SBATCH --time %(maxtime)s
@@ -15,7 +16,12 @@ tmplt='''#!/bin/bash
 
 def runJobs(jobs, o, name='archivejobs'):
     logger=logging.getLogger('archive')
+    if len(jobs)==0:
+        logger.debug('No jobs to run')
+        return 0
+    
     d=locals()
+    d['partition']='ycga'
     d['range']=f'0-{len(jobs)-1}%{o.maxthds}'        
     d['jobfile']=tempfile.NamedTemporaryFile(dir=o.staging, mode='w', delete=o.clean)
     batchfile=tempfile.NamedTemporaryFile(dir=o.staging, mode='w', delete=o.clean)
@@ -30,6 +36,7 @@ def runJobs(jobs, o, name='archivejobs'):
     cmd=f'/opt/slurm/current/bin/sbatch --wait {batchfile.name}'
     logger.debug(f'running {cmd}')
     ret=subprocess.run(cmd, shell=True)
+    logger.debug(f'finished {cmd}')
     return ret.returncode
     
 if __name__=='__main__':

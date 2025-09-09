@@ -7,7 +7,7 @@ Todo
 - DONE avoid clobbering project tars if multiple projects of same name exist in tree
 - LATER change owner of project tars to pi and pi group, chmod to 440
 
-'''
+xo'''
 
 '''
 Data is either pre 1.8 or 1.8.
@@ -729,5 +729,5 @@ if __name__=='__main__':
 
     if o.clean:
         logger.debug("Removing staging dir %s" % o.staging)
-        shutil.rmtree(o.staging)
+        shutil.rmtree(o.staging, ignore_errors=True)
     logger.info("Archiving Finished %d Runs, %d Tarfiles, %d Files, %d quips, %f GB, %f Sec, %f MB/sec" % (totalstats.runs, totalstats.tarfiles, totalstats.files, totalstats.quips, float(totalstats.bytes)/1024**3, t, bw))

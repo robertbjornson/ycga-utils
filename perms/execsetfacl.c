@@ -19,6 +19,7 @@ const char * pref[] =
   {
    "/gpfs/ycga/sequencers", // illumina
    "/gpfs/gibbs/pi/ycga",   // pacbio and 10x
+   "/gpfs/ycga/project/mane/ycga_sample_tracking/seqdata", // Jim's data staging
    "/gpfs/ycga/project/lsprog/rdb9/repos/ycga-utils", //testing
   };      
 
@@ -32,7 +33,7 @@ int sanity_check_args(int argc, char *argv[])
   // skip options
   while ((c = getopt (argc, argv, "dbm")) != -1) ;
 
-  if (argc-optind != 2) {
+  if (argc-optind > 2) {
     printf("Error:Only single path supported\n");
     exit(1);
   }

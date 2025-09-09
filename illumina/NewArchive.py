@@ -65,8 +65,10 @@ gpg -d --batch --passphrase-file ~/.ssh/gpg.txt < sample.txt.gpg > sample.txt.de
 
 import os, tarfile, subprocess, logging, argparse, sys, re, tempfile, time, threading, hashlib, gzip, glob, datetime, shutil, hashlib, functools
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import psutil
 
 import S3Interface
+from Stats import stats
 
 # Directories matching these patterns, and everything below them, will not be archived
 ignoredirs=r'''Aligned\\S*$
@@ -103,6 +105,7 @@ ignoreDirsPat=re.compile('|'.join(ignoredirs.split()))
 # Files matching these patterns will not be archived
 ignorefiles='''s_+.+_anomaly.txt$
 s_+.+_reanomraw.txt$
+Undetermined.+fastq.gz$
 '''
 ignoreFilesPat=re.compile(r'|'.join(ignorefiles.split()))
 
@@ -160,10 +163,12 @@ It keeps a list of validation tasks to be done at the end
 class tarwrapper(object):
     def __init__(self, fn):
         self.fn=fn # name of tar file
-        self.tmpfn=o.staging+'/'+os.path.basename(fn)
+        bn=os.path.basename(fn)
+        self.tmpfn=tempfile.NamedTemporaryFile(dir=o.staging, suffix=f'_{bn}').name
+        #self.tmpfn=f'{o.staging}/{bn}.tar'
         self.tfp=tarfile.open(self.tmpfn, 'w')
-        #self.tfp=tarfile.open(fn, 'w')
         self.added=set() #files already added to archive
+        logger.debug(f'Creating temp tar file {self.tmpfn}')
 
     ''' 
     name is the actual file holding the data (sometimes a temp file)
@@ -183,10 +188,10 @@ class tarwrapper(object):
     def finalize(self, archivers):
         self.tfp.close()
         logger.debug("Closing %s" % self.tmpfn)
-        logger.debug("Moving %s to %s" % (self.tmpfn, self.fn))
+        logger.debug(f"Moving {self.tmpfn} to {o.bucket}:{self.fn} ({o.storageclass})")
         ''' for all archivers '''
         for a in archivers:
-            a.moveFile(self.tmpfn, self.fn, extra={'StorageClass':'DEEP_ARCHIVE'}) 
+            a.moveFile(self.tmpfn, self.fn, extra={'StorageClass':o.storageclass}) 
             # remove file
             logger.debug(f"Removing {self.tmpfn}")
             os.remove(self.tmpfn)
@@ -288,8 +293,10 @@ We will also create a log file and a finished file.  Thus:
 '''
 
 def getSum(fn):
-    h=hashlib.new('sha256')
-    h.update(open(fn, 'rb').read())
+    h = hashlib.sha256()
+    with open(fn, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            h.update(chunk)
     return h.hexdigest()
 
 def makeTarball(top, arcdir, name, TodoArchivers, runstats):
@@ -312,6 +319,9 @@ def makeTarball(top, arcdir, name, TodoArchivers, runstats):
     fastqs=[]
     for dirname, dirs, files in os.walk(top):
         files.sort()
+
+        logger.debug(f"Memory usage: {psutil.Process(os.getpid()).memory_info().rss / 1024 ** 2:.2f} MB")
+
         # prunedirs does two things:
         # 1)removes unwanted directorys from the list
         # 2)removes and return a list of dirs that look like projects, which will be handled in a separate tarballs
@@ -325,7 +335,10 @@ def makeTarball(top, arcdir, name, TodoArchivers, runstats):
             fp=dirname+'/'+f
             try:
                 sz=os.stat(fp).st_size
-                chksum=getSum(fp)
+                if o.dryrun:
+                    chksum=0
+                else:
+                    chksum=getSum(fp)
                 logger.debug(f"adding {fp} ({sz} bytes sha256 {chksum}")
                 runstats.files+=1; runstats.bytes+=sz
             except OSError:
@@ -369,16 +382,20 @@ def archiveOK(arcdir, Archivers):
             continue
         elif len(filelist)>0:
             logger.error(f"Partial archive of {arcdir} exists")
-            sys.exit()
+            continue
         else:
             logger.debug(f"{a} missing archive {arcdir}, considering for archive" )
             todo.append(a)
     return todo
 
 def archiveRunWrapper(rundir, arcdir):
-    Archivers=[S3Interface.client(logger, bucket='ycgatestbucket', credentials='/home/rdb9/.aws/credentials', profile='default'),]
-    return archiveRun(rundir, arcdir, Archivers)
-    
+    try:
+        Archivers = [S3Interface.client(logger, bucket=o.bucket, credentials='/home/rdb9/.aws/credentials', profile='default')]
+        return archiveRun(rundir, arcdir, Archivers)
+    except Exception as e:
+        logger.error(f"Error in archiveRunWrapper: {e}", exc_info=True)
+        raise
+
 def archiveRun(rundir, arcdir, TodoArchivers):
     runstats=stats()
 
@@ -397,14 +414,14 @@ def archiveRun(rundir, arcdir, TodoArchivers):
     runstats.runs=1
     # set up log file for this run 
     if not o.dryrun:
-        runLogFileBN='%s_%s_archive.log' % (o.runname, time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime()))
-        runLogFile='%s/%s' % (o.staging, runLogFileBN)
+        runLogFileBN='%s_%s_ArchiveDirs.log' % (o.runname, time.strftime("%Y_%m_%d_%H_%M_%S", time.gmtime())) 
+        runLogFile=tempfile.NamedTemporaryFile(dir=o.staging, suffix=f'_{runLogFileBN}').name
         h=logging.FileHandler(runLogFile)
         h.setLevel(logging.DEBUG)
         h.setFormatter(formatter)
         logger.addHandler(h)
     
-    logger.info("Archiving %s to %s" % (rundir, arcdir))
+    logger.info(f"Archiving {rundir} to {o.bucket}:{arcdir}")
     if not os.path.isdir(rundir):
         error("Bad rundir %s" % rundir)
 
@@ -415,7 +432,7 @@ def archiveRun(rundir, arcdir, TodoArchivers):
     # cd to dir above rundir
     os.chdir(rundir); os.chdir('..')
 
-    if o.dryrun:
+    if False and o.dryrun:
         logger.debug("pretending to make tarball")
     else:
         makeTarball(o.runname, arcdir, "%s_%%s" % o.runname, TodoArchivers, runstats)
@@ -456,15 +473,18 @@ if __name__=='__main__':
     parser.add_argument("-i", "--infile", dest="infile", help="file containing runs to archive")
     parser.add_argument("-r", "--rundir", dest="rundir", help="run directory")
     parser.add_argument("-a", "--arcdir", dest="arcdir", default="archive", help="archive directory")
-    parser.add_argument("--cuton", dest="cuton", help="date cuton; a run earlier than this 6 digit date will not be archived.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
+    parser.add_argument("-f", "--force", dest="force", default=False, action="store_true", help="do even if existing")
+    parser.add_argument("--cuton", dest="cuton", help="date cuton; a run earlier than this 6 digit date will not be considered.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
     parser.add_argument("-c", "--cutoff", dest="cutoff", help="date cutoff; a run later than this 6 digit date will not be archived.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
     parser.add_argument("-l", "--logfile", dest="logfile", default="rdb9archive", help="logfile prefix")
     parser.add_argument("--staging", dest="staging", default=tempfile.mkdtemp(prefix='/home/rdb9/palmer_scratch/staging/'), help="staging prefix of dir for tars and log file")
     parser.add_argument("--maxruns", dest="maxruns", default=0, type=int, help="Only archive this many runs (for testing purposes)")
     parser.add_argument("-w", "--workers", dest="workers", default=1, type=int, help="num workers for parallelism")
+    parser.add_argument("--bucket", dest="bucket", default="ycgasequencearchive", help="archivebucket")
+    parser.add_argument("--storageclass", dest="storageclass", default="DEEP_ARCHIVE", help="storage class")
 
     o=parser.parse_args()
-
+    
     starttime=time.time()
 
     # set up logging
@@ -477,11 +497,13 @@ if __name__=='__main__':
     if not o.verbose: hc.setLevel(logging.INFO)
     logger.addHandler(hc)
 
-    hf=logging.FileHandler("%s_%s.log" % (o.logfile, time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())))
+    hf=logging.FileHandler("%s_%s.log" % (o.logfile, time.strftime("%Y_%m_%d_%H_%M_%S", time.gmtime())))
     hf.setFormatter(formatter)
-    if not o.verbose: hf.setLevel(logging.DEBUG)
+    if not o.verbose: hf.setLevel(logging.INFO)
     logger.addHandler(hf)
-                        
+
+    logger.info(o)
+    
     # do some validation
     # require exactly one of -r, --automatic, -i
     if countTrue(o.rundir, o.automatic, o.infile) != 1:
@@ -518,15 +540,16 @@ if __name__=='__main__':
     elif o.automatic:
         rds=['/ycga-ba/ba_sequencers[12356]/sequencer?/runs/[0-9]*', '/ycga-gpfs/sequencers/illumina/sequencer*/runs/[0-9]*']
         runs=sorted(functools.reduce(lambda a,b: a+b, [glob.glob(rd) for rd in rds]))
-        logger.info("WARNING: skipping sequencer F")
-        runs=[r for r in runs if r.find("sequencerF") == -1] # filter out all sequencerF runs
+        # sequencer F is the self serve sequencer, with a different data layout.  
+        #logger.info("WARNING: skipping sequencer F")
+        #runs=[r for r in runs if r.find("sequencerF") == -1] # filter out all sequencerF runs
 
     # set up parallel workers
     if o.workers < 1 or o.workers > 64:
         logger.error("Illegal number for workers")
         sys.exit(1)
 
-    Archivers=[S3Interface.client(logger, bucket='ycgatestbucket', credentials='/home/rdb9/.aws/credentials', profile='default'),]
+    Archivers=[S3Interface.client(logger, bucket=o.bucket, credentials='/home/rdb9/.aws/credentials', profile='default'),]
     todoruns=[]
     
     for run in runs:
@@ -547,7 +570,10 @@ if __name__=='__main__':
             continue
 
         # see what needs to be archived, return needed archivers.  Fail if partial archive found.
-        archivers=archiveOK(arcdir, Archivers)
+        if o.force:
+            archivers=Archivers
+        else:
+            archivers=archiveOK(arcdir, Archivers)
         
         if run.endswith(".DELETED") or run.endswith(".deleted"):
             if archivers:
@@ -561,18 +587,29 @@ if __name__=='__main__':
         
         logger.debug(f"Plan to archive {run}")
         todoruns.append(run)
-        
-    executor = ProcessPoolExecutor(max_workers=o.workers)
-    futures=[]
-    
-    for run in todoruns:
-        arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
-        future=executor.submit(archiveRunWrapper, run, arcdir) # do the archiving
-        futures.append(future)
 
-    for future in as_completed(futures):
-        runstats=future.result()
-        totalstats.comb(runstats)
+    # set up parallel workers
+    if o.workers>1:
+        executor = ProcessPoolExecutor(max_workers=o.workers)
+        futures=[]
+
+    if o.maxruns:
+        todoruns=todoruns[:o.maxruns]
+
+    if o.workers==1:
+        for run in todoruns:
+            arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
+            runstats=archiveRunWrapper(run, arcdir) # do the archiving
+            totalstats.comb(runstats)
+    else:
+        for run in todoruns:
+            arcdir=mkarcdir(run, o.arcdir) # returns path to archive directory for this run
+            future=executor.submit(archiveRunWrapper, run, arcdir) # do the archiving
+            futures.append(future)
+
+        for future in as_completed(futures):
+            runstats=future.result()
+            totalstats.comb(runstats)
         
     '''
     for run, archivers in runs:

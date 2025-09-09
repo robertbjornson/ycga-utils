@@ -18,7 +18,10 @@ do
   echo $tf
   #[ ! -f $tf ] && (echo "$tf does not exist!"; exit 1)
 
-  [[ $(find $tf -type f -size +10000c 2>/dev/null) ]] ||  (echo "$tf does not exist or too small!"; exit 1)
+  # this failed for links
+  # [[ $(find $tf -type f -size +10000c 2>/dev/null) ]] ||  (echo "$tf does not exist or too small!"; exit 1)
+
+  [[ $(wc -c < $tf) -gt 10000 ]] || (echo "$tf does not exist or too small!"; exit 1) 
 
   if [ "$1" = "--delete" ]
   then

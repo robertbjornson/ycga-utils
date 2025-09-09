@@ -45,7 +45,7 @@ def getRundate(run):
 def doRm(e):
     lst=glob.glob(e)
     if o.dryrun:
-        logger.debug(f"removing {e}")
+        logger.debug(f"removing {e}, {len(lst)} files")
         return
     
     for t in lst:
@@ -56,7 +56,7 @@ def doRm(e):
 
 def cleanRun(r):
     logger.info(f'Cleaning {r}')
-    doRm(f'{r}/Data/Intensities/BaseCalls/Undetermined*') 
+    doRm(f'{r}/Data/Intensities/BaseCalls/Unaligned*/Undetermined*') 
     doRm(f'{r}/Data/Intensities/BaseCalls/L00?')
     doRm(f'{r}/Data/Intensities/L00?')
     doRm(f'{r}/ThumbnailImages')
@@ -73,6 +73,7 @@ if __name__=='__main__':
     parser.add_argument("-i", "--infile", dest="infile", help="file containing runs to clean")
     parser.add_argument("-r", "--rundir", dest="rundir", help="a single run directory to clean")
     parser.add_argument("--cutoff", dest="cutoff", default="-45", help="date cutoff; a run later than this 6 digit date will not be cleaned.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
+    parser.add_argument("--cuton", dest="cuton", default=None, help="date cutoff; a run earlier than this 6 digit date will not be cleaned.  E.g. 150531.  Negative numbers are interpreted as days in the past, e.g. -45 means 45 days ago.")
     parser.add_argument("-l", "--logfile", dest="logfile", default="clean", help="logfile prefix")
     parser.add_argument("-f", "--force", dest="force", action="store_true", default=False, help="force clean")
     parser.add_argument("--maxruns", dest="maxruns", default=0, type=int, help="Only clean this many runs (for testing purposes)")
@@ -100,6 +101,7 @@ if __name__=='__main__':
         error("Must specify exactly one of -r --automatic -i")
     
     if o.cutoff: o.cutoff=fixCut(o.cutoff)
+    if o.cuton: o.cutoff=fixCut(o.cuton)
 
     # sanity check to avoid accidents
     mindays=45
@@ -150,6 +152,10 @@ if __name__=='__main__':
         rundate=getRundate(os.path.basename(run))
         if o.cutoff < rundate:
             logger.debug("%s too recent" % run)
+            continue
+
+        if o.cuton and o.cuton > rundate:
+            logger.debug("%s too old" % run)
             continue
 
         cleaned='%s/cleaned.txt' % (run,)

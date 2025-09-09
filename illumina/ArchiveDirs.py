@@ -177,7 +177,7 @@ def archiveDS(tarBaseName, d):
     ts=int(os.stat(src).st_mtime)
     deltaT=time.time()-ts
     if deltaT < o.archPeriod * secPerDay:
-        logger.info(f"{src} too young to archive")
+        logger.debug(f"{src} too young to archive")
         return runstats
 
     remoteTarFile=f'{tarBaseName}.tar'
@@ -201,7 +201,7 @@ def archiveDS(tarBaseName, d):
                 TodoArchivers.append(a)
 
         if not TodoArchivers:
-            logger.info(f'Not archiving {src}, already done.')
+            logger.debug(f'Not archiving {src}, already done.')
             return runstats
         else:
             logger.debug(f'getting started {d}.  Archivers {TodoArchivers}')  
@@ -260,7 +260,7 @@ def deleteDS(tarBaseName, d):
     ts=int(os.stat(d).st_mtime)
     deltaT=time.time()-ts
     if deltaT < o.delPeriod * secPerDay:
-        logger.info(f"{d} too young to delete")
+        logger.debug(f"{d} too young to delete")
         return runstats
 
     remoteTarFile=f'{tarBaseName}.tar'
@@ -273,6 +273,7 @@ def deleteDS(tarBaseName, d):
         if not (logOK and tarOK):
             logger.error(f"expected archive {remoteTarFile} invalid, not deleting dataset")
             runstats.errors+=1
+            return runstats
 
     cmd=f"rm -rf {d}"
     msg=deleteTmplt % {'date':(time.strftime("%Y_%m_%d_%H:%M:%S", time.gmtime())), 'bucket':o.bucket, 'location':remoteTarFile}
@@ -387,9 +388,24 @@ if __name__=='__main__':
     tarballs.  If descend is set, descend one level to the actual targets.  Targets contains just the dir or a dir/subdir
     targets list elements are: [archdir, (full) grand parent dir, parent dir (optional, can be None), dir]
     """
+    tmpArchivers=createArchivers()
+
+    # this is a list of known missing tars, we want to avoid false positives
+    ok_missing={k.strip() for k in open('/gpfs/ycga/work/lsprog/tools/ycga-utils/illumina/ok_missing.txt')}
     if o.searchdir:
         for d in sorted(os.listdir(o.searchdir)):
             fd=os.path.join(o.searchdir, d)
+            if os.path.isfile(fd) and fd.lower().endswith(".deleted"):
+                # double check archive exists for delete directory
+                for a in tmpArchivers:
+                    logger.debug(f"verifying {fd} on {a}")
+                    tbn=genTarBaseName(fd)[:-8]
+                    remoteTarFile=tbn+".tar"
+                    if remoteTarFile in ok_missing:
+                        continue
+                    tarOK=a.exists(remoteTarFile) and True
+                    if not tarOK:
+                        logger.error(f"Missing archive file {remoteTarFile}")
             if not os.path.isdir(fd): continue
             if fd.endswith(".NOARCHIVE"): continue
             if o.descend:
@@ -416,7 +432,7 @@ if __name__=='__main__':
     else:
         error("Should never get here")
 
-    tmpArchivers=createArchivers()
+
     # First archive whatever needs archiving, depending on date and archive status
     # consider parallelizing here
 
